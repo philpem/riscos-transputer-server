@@ -132,7 +132,7 @@ PRIVATE VOID WindowHandler(wimp_eventstr* e, void* handle)
   {
 #ifdef DWINDOW
     case wimp_EREDRAW:  DWindow_Select(DWindow_Redraw);
-                        RedrawWindow();                
+                        RedrawWindow();
                         DWindow_Select(DWindow_None);   break;
 #else
     case wimp_EREDRAW:  RedrawWindow();                 break;

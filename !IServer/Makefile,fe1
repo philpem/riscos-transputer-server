@@ -2,22 +2,21 @@
 
 
 # Toolflags:
-CCflags = -c -depend !Depend -IC: -g -throwback  -DRISCOS  -DBOARD_ID=ARC_TMB  
+CCflags = -c -depend !Depend -IRISC_OSLib: -IC: -g -throwback  -DRISCOS  -DBOARD_ID=ARC_TMB
 Linkflags = -aif -o $@
-ObjAsmflags = -Throwback -g -Stamp -MaxCache 8 -depend !Depend -CloseExec -Quit 
+ObjAsmflags = -throwback -g -Stamp -MaxCache 8 -depend !Depend -CloseExec -Quit -iOSLib:
 CMHGflags = 
 LibFileflags = -c -o $@
 Squeezeflags = -o $@
-AAsmflags = -depend !Depend -quit -CloseExec -To $@ -From
 
 
 # Final targets:
 @.!RunImage:   @.o.FileC @.o.HostC @.o.IServer @.o.RO_Debug @.o.RO_Files \
-        @.o.RO_Keybrd @.o.RO_Link @.o.RO_Screen @.o.RO_Window @.o.ServerC @.o.TMBLink \
-        Nexus::InHouse.$.C31b.CLib.o.Stubs Nexus::InHouse.$.C31b.RISC_OSLib.o.RISC_OSLib @.o.RO_TBack 
+        @.o.RO_Keybrd @.o.RO_Link @.o.RO_Screen @.o.RO_Window @.o.ServerC @.o.TMBLink @.o.RO_TBack \
+        C:o.Stubs RISC_OSLib:RISC_OSLib 
         Link $(Linkflags) @.o.FileC @.o.HostC @.o.IServer @.o.RO_Debug \
         @.o.RO_Files @.o.RO_Keybrd @.o.RO_Link @.o.RO_Screen @.o.RO_Window @.o.ServerC @.o.TMBLink \
-        Nexus::InHouse.$.C31b.CLib.o.Stubs Nexus::InHouse.$.C31b.RISC_OSLib.o.RISC_OSLib @.o.RO_TBack 
+        @.o.RO_TBack C:o.Stubs RISC_OSLib:RISC_OSLib 
 
 
 # User-editable dependencies:
@@ -51,24 +50,20 @@ AAsmflags = -depend !Depend -quit -CloseExec -To $@ -From
 
 
 # Dynamic dependencies:
-o.DWo.DWindow:	c.DWindow
-o.DWindow:	C:h.wimp
-o.DWindow:	C:h.os
-o.DWindow:	C:h.sprite
-o.DWindow:	C:h.wimpt
-o.DWindow:	C:h.event
-o.DWindow:	C:h.menu
-o.DWindow:	C:h.res
-o.DWindow:	C:h.resspr
-o.DWindow:	C:h.template
-o.DWindow:	C:h.win
-o.DWindow:	C:h.werr
 o.FileC:	c.FileC
 o.FileC:	h.inmos
 o.FileC:	h.iserver
 o.FileC:	h.pack
-o.FileC:	C:h.os
+o.FileC:	RISC_OSLib:h.os
 o.FileC:	C:h.swis
+o.FileC:	C:h.kernel
+o.FileC:	c.FileC
+o.FileC:	h.inmos
+o.FileC:	h.iserver
+o.FileC:	h.pack
+o.FileC:	RISC_OSLib:h.os
+o.FileC:	C:h.swis
+o.FileC:	C:h.kernel
 o.HostC:	c.HostC
 o.HostC:	h.inmos
 o.HostC:	h.iserver
@@ -76,75 +71,77 @@ o.HostC:	h.pack
 o.IServer:	c.IServer
 o.IServer:	h.inmos
 o.IServer:	h.iserver
-o.IServer:	C:h.visdelay
-o.IServer:	C:h.os
+o.IServer:	RISC_OSLib:h.visdelay
+o.IServer:	RISC_OSLib:h.os
 o.RO_Debug:	c.RO_Debug
 o.RO_Debug:	h.inmos
 o.RO_Debug:	h.iserver
-o.RO_Debug:	C:h.werr
+o.RO_Debug:	RISC_OSLib:h.werr
 o.RO_Files:	c.RO_Files
-o.RO_Files:	C:h.os
+o.RO_Files:	RISC_OSLib:h.os
 o.RO_Files:	C:h.swis
+o.RO_Files:	C:h.kernel
 o.RO_Files:	h.inmos
 o.RO_Files:	h.iserver
 o.RO_Keybrd:	c.RO_Keybrd
 o.RO_Keybrd:	h.inmos
 o.RO_Keybrd:	h.iserver
-o.RO_Keybrd:	C:h.event
-o.RO_Keybrd:	C:h.menu
-o.RO_Keybrd:	C:h.wimp
-o.RO_Keybrd:	C:h.os
-o.RO_Keybrd:	C:h.sprite
-o.RO_Keybrd:	C:h.os
-o.RO_Keybrd:	C:h.wimp
-o.RO_Keybrd:	C:h.wimpt
+o.RO_Keybrd:	RISC_OSLib:h.event
+o.RO_Keybrd:	RISC_OSLib:h.menu
+o.RO_Keybrd:	RISC_OSLib:h.wimp
+o.RO_Keybrd:	RISC_OSLib:h.os
+o.RO_Keybrd:	RISC_OSLib:h.sprite
+o.RO_Keybrd:	RISC_OSLib:h.os
+o.RO_Keybrd:	RISC_OSLib:h.wimp
+o.RO_Keybrd:	RISC_OSLib:h.wimpt
 o.RO_Keybrd:	h.DWindow
 o.RO_Link:	c.RO_Link
-o.RO_Link:	C:h.event
-o.RO_Link:	C:h.menu
-o.RO_Link:	C:h.wimp
-o.RO_Link:	C:h.os
-o.RO_Link:	C:h.sprite
-o.RO_Link:	C:h.os
+o.RO_Link:	RISC_OSLib:h.event
+o.RO_Link:	RISC_OSLib:h.menu
+o.RO_Link:	RISC_OSLib:h.wimp
+o.RO_Link:	RISC_OSLib:h.os
+o.RO_Link:	RISC_OSLib:h.sprite
+o.RO_Link:	RISC_OSLib:h.os
 o.RO_Link:	C:h.swis
-o.RO_Link:	C:h.win
+o.RO_Link:	C:h.kernel
+o.RO_Link:	RISC_OSLib:h.win
 o.RO_Link:	h.DWindow
 o.RO_Screen:	c.RO_Screen
 o.RO_Screen:	h.inmos
 o.RO_Screen:	h.iserver
-o.RO_Screen:	C:h.os
-o.RO_Screen:	C:h.wimp
-o.RO_Screen:	C:h.sprite
-o.RO_Screen:	C:h.wimpt
-o.RO_Screen:	C:h.werr
+o.RO_Screen:	RISC_OSLib:h.os
+o.RO_Screen:	RISC_OSLib:h.wimp
+o.RO_Screen:	RISC_OSLib:h.sprite
+o.RO_Screen:	RISC_OSLib:h.wimpt
+o.RO_Screen:	RISC_OSLib:h.werr
 o.RO_Screen:	C:h.swis
+o.RO_Screen:	C:h.kernel
 o.RO_Screen:	h.DWindow
 o.RO_Window:	c.RO_Window
 o.RO_Window:	h.inmos
 o.RO_Window:	h.iserver
-o.RO_Window:	C:h.baricon
-o.RO_Window:	C:h.wimp
-o.RO_Window:	C:h.os
-o.RO_Window:	C:h.sprite
-o.RO_Window:	C:h.dbox
-o.RO_Window:	C:h.event
-o.RO_Window:	C:h.menu
-o.RO_Window:	C:h.menu
-o.RO_Window:	C:h.res
-o.RO_Window:	C:h.resspr
-o.RO_Window:	C:h.template
-o.RO_Window:	C:h.wimp
-o.RO_Window:	C:h.wimpt
-o.RO_Window:	C:h.win
+o.RO_Window:	RISC_OSLib:h.baricon
+o.RO_Window:	RISC_OSLib:h.wimp
+o.RO_Window:	RISC_OSLib:h.os
+o.RO_Window:	RISC_OSLib:h.sprite
+o.RO_Window:	RISC_OSLib:h.dbox
+o.RO_Window:	RISC_OSLib:h.event
+o.RO_Window:	RISC_OSLib:h.menu
+o.RO_Window:	RISC_OSLib:h.menu
+o.RO_Window:	RISC_OSLib:h.res
+o.RO_Window:	RISC_OSLib:h.resspr
+o.RO_Window:	RISC_OSLib:h.template
+o.RO_Window:	RISC_OSLib:h.wimp
+o.RO_Window:	RISC_OSLib:h.wimpt
+o.RO_Window:	RISC_OSLib:h.win
 o.RO_Window:	h.DWindow
 o.ServerC:	c.ServerC
 o.ServerC:	h.inmos
 o.ServerC:	h.iserver
 o.ServerC:	h.pack
+o.TMBLink: s.TMBLink
+o.TMBLink: OSLibInclude:Hdr.Types
+o.TMBLink: OSLibInclude:Hdr.OS
+o.TMBLink: OSLibInclude:Hdr.Podule
 o.RO_TBack:	c.RO_TBack
-o.RO_TBack:	C:h.os
-@.o.TMBLink: ARMLib:Registers
-@.o.TMBLink: ARMLib:Macros
-@.o.TMBLink: ARMLib:APCS
-@.o.TMBLink: ARMLib:OS
-@.o.TMBLink: ARMLib:Podule
+o.RO_TBack:	RISC_OSLib:h.os

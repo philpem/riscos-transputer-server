@@ -7,11 +7,15 @@
 
                 AREA    |C$$code|, CODE, READONLY
 
-                GET     ARMLib:Registers
-                GET     ARMLib:Macros
-                GET     ARMLib:APCS
-                GET     ARMLib:OS
-                GET     ARMLib:Podule
+                ;GET     ARMLib:Registers
+                ;GET     ARMLib:Macros
+                ;GET     ARMLib:APCS
+                ;GET     ARMLib:OS
+                ;GET     ARMLib:Podule
+
+                GET     OSLibInclude:Hdr.Types
+                GET     OSLibInclude:Hdr.OS
+                GET     OSLibInclude:Hdr.Podule 
 
                 EXPORT  OpenLink
                 EXPORT  CloseLink
@@ -60,11 +64,12 @@ OpenLink        ROUT                                    ;
                 MOV     r3,#3                           ; Start from podule 3
                                                         ;
 00              MOV     r2,sp                           ; Point to temporary buffer
-                SWIX    Podule_ReadHeader               ; ... and read expansion card header
+                SWI     XPodule_ReadHeader              ; ... and read expansion card header
                 BVS     %FT10                           ; ... skipping if not present
                                                         ;
                 LDRB    r0,[sp,#3]                      ; Get product type (low)
                 TEQ     r0,#&4B                         ; ... and check for TMB ID
+                TEQNE   r0,#&24                         ; (PAP) ... or TLink ID
                 LDREQ   r0,[sp,#4]                      ; ... checking second word if OK
                 TEQEQ   r0,#&00000E00                   ;
                 BEQ     %FT20                           ; Skip forward if card located
@@ -126,7 +131,7 @@ CloseLink       ROUT                                    ;
                 MOVEQS  pc,lr                           ; ... and return if so
                                                         ;
                 MOV     r3,lr                           ; Else save return address
-                SWIX    OS_EnterOS                      ; ... and switch to SVC mode
+                SWI     XOS_EnterOS                     ; ... and switch to SVC mode
                 STMFD   sp!,{r1,r3-r4}                  ; Save registers on SVC stack
                                                         ;
                 MOVS    r3,#256                         ; Loop timeout limit
@@ -173,7 +178,7 @@ CloseLink       ROUT                                    ;
                 MOVEQS  pc,lr                           ; ... and return if so
                                                         ;
                 MOV     r3,lr                           ; Else save return address
-                SWIX    OS_EnterOS                      ; ... and switch to SVC mode
+                SWI     XOS_EnterOS                     ; ... and switch to SVC mode
                 STMFD   sp!,{r1,r3-r4}                  ; Save registers on SVC stack
                                                         ;
                 MOVS    r3,#256                         ; Loop timeout limit
@@ -211,7 +216,7 @@ Pause           ROUT                                    ;
                                                         ;
 ResetLink       ROUT                                    ;
                 MOV     r3,lr                           ; Save return address
-                SWIX    OS_EnterOS                      ;
+                SWI     XOS_EnterOS                     ;
                 MOV     r2,lr                           ; Preserve r14_svc
                                                         ;
                 MOV     r1,#CSR_Reset:OR:CSR_LAReset:OR:CSR_LkSpeed    ; Assert Host and C012 resets
@@ -230,7 +235,7 @@ ResetLink       ROUT                                    ;
                                                         ;
 AnalyseLink     ROUT                                    ;
                 MOV     r3,lr                           ; Save return address
-                SWIX    OS_EnterOS                      ;
+                SWI     XOS_EnterOS                     ;
                 MOV     r2,lr                           ; Preserve r14_svc
                                                         ;
                 MOV     r1,#CSR_Analyse:OR:CSR_LkSpeed  ; Assert analyse
@@ -256,7 +261,7 @@ AnalyseLink     ROUT                                    ;
                                                         ;
 TestError       ROUT                                    ;
                 MOV     r3,lr                           ; Save return address
-                SWIX    OS_EnterOS                      ; ... switch to SVC mode
+                SWI     XOS_EnterOS                     ; ... switch to SVC mode
                 LDRB    r0,Lk_CSR                       ; Get status byte
                 MOV     r0,r0,LSR#4                     ; Isolate error bit
                 AND     r0,r0,#1                        ;
@@ -273,7 +278,7 @@ TestError       ROUT                                    ;
                                                         ;
 TestRead        ROUT                                    ;
                 MOV     r3,lr                           ; Save return address
-                SWIX    OS_EnterOS                      ; ... switch to SVC mode
+                SWI     XOS_EnterOS                     ; ... switch to SVC mode
                 LDRB    r0,Lk_ReadStatus                ; Get link status byte
                 AND     r0,r0,#1                        ;
                 MOVS    pc,r3                           ; ... and return
@@ -288,7 +293,7 @@ TestRead        ROUT                                    ;
                                                         ;
 TestWrite       ROUT                                    ;
                 MOV     r3,lr                           ; Save return address
-                SWIX    OS_EnterOS                      ; ... switch to SVC mode
+                SWI     XOS_EnterOS                     ; ... switch to SVC mode
                 LDRB    r0,Lk_WriteStatus               ; Get link status byte
                 AND     r0,r0,#1                        ;
                 MOVS    pc,r3                           ; ... and return

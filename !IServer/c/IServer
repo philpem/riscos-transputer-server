@@ -18,7 +18,7 @@
 
 #include <stdio.h>
 #include <signal.h>
-#include <string.h> 
+#include <string.h>
 
 #ifdef HELIOS
 #include <stdlib.h>
@@ -154,7 +154,7 @@ PUBLIC char ViaFilePath[160] = "";
 
 PRIVATE BYTE BootFileName[MAX_BOOT_FILE_LENGTH+1];
 
-PRIVATE BYTE LinkName[MAX_LINK_NAME_LENGTH+1];  
+PRIVATE BYTE LinkName[MAX_LINK_NAME_LENGTH+1];
 
 PUBLIC LINK TheLink = -1 ;                                                         /*  the server's idea of the active link  */
 
@@ -304,7 +304,7 @@ PRIVATE VOID Core()
 
 
 /*
- *   PrintHelp 
+ *   PrintHelp
  */
 
 PRIVATE VOID PrintHelp ()
@@ -341,7 +341,7 @@ PRIVATE VOID PrintHelp ()
 
 
 /*
- *   ParseCommandLine 
+ *   ParseCommandLine
  */
 
 PRIVATE VOID ParseCommandLine ()
@@ -367,7 +367,7 @@ PRIVATE VOID ParseCommandLine ()
 
    s = RealCommandLine;
    t = DoctoredCommandLine;
-   
+
    while( (*s) && (*s != ' ') )                                            /* skip the first argv */
       ++s;
    if ( *s == ' ' )
@@ -488,7 +488,7 @@ PRIVATE VOID ParseCommandLine ()
                      case 'z' :
                      case 'Z' :  ++s; ++CocoPops; break;
 
-                     default  :  
+                     default  :
                                  *t++ = SWITCH_CHAR;
                                  *t++ = *(s-1);
                                  Gobble = FALSE;
@@ -516,7 +516,7 @@ PRIVATE int Serve ()
    register int Count, Size;
    BOOL TerminateFlag = FALSE;
    int Result;
-   
+
 #ifdef RISCOS
    if (WindowSwitch) StartWindow();
 #endif
@@ -566,30 +566,30 @@ PRIVATE int Serve ()
             }
          switch( Tbuf[2] )
             {
-               case SP_OPEN     : SpOpen();     break; 
-               case SP_CLOSE    : SpClose();    break; 
-               case SP_READ     : SpRead();     break; 
-               case SP_WRITE    : SpWrite();    break; 
-               case SP_GETS     : SpGets();     break; 
-               case SP_PUTS     : SpPuts();     break; 
-               case SP_FLUSH    : SpFlush();    break; 
-               case SP_SEEK     : SpSeek();     break; 
-               case SP_TELL     : SpTell();     break; 
-               case SP_EOF      : SpEof();      break; 
-               case SP_FERROR   : SpError();    break; 
-               case SP_REMOVE   : SpRemove();   break; 
-               case SP_RENAME   : SpRename();   break; 
-               case SP_GETKEY   : SpGetkey();   break; 
-               case SP_POLLKEY  : SpPollkey();  break; 
-               case SP_GETENV   : SpGetenv();   break; 
-               case SP_TIME     : SpTime();     break; 
-               case SP_SYSTEM   : SpSystem();   break; 
+               case SP_OPEN     : SpOpen();     break;
+               case SP_CLOSE    : SpClose();    break;
+               case SP_READ     : SpRead();     break;
+               case SP_WRITE    : SpWrite();    break;
+               case SP_GETS     : SpGets();     break;
+               case SP_PUTS     : SpPuts();     break;
+               case SP_FLUSH    : SpFlush();    break;
+               case SP_SEEK     : SpSeek();     break;
+               case SP_TELL     : SpTell();     break;
+               case SP_EOF      : SpEof();      break;
+               case SP_FERROR   : SpError();    break;
+               case SP_REMOVE   : SpRemove();   break;
+               case SP_RENAME   : SpRename();   break;
+               case SP_GETKEY   : SpGetkey();   break;
+               case SP_POLLKEY  : SpPollkey();  break;
+               case SP_GETENV   : SpGetenv();   break;
+               case SP_TIME     : SpTime();     break;
+               case SP_SYSTEM   : SpSystem();   break;
                case SP_EXIT     : TerminateFlag = TRUE;
                                   Result = SpExit();
                                   break;
-               case SP_COMMAND  : SpCommand();  break; 
-               case SP_CORE     : SpCore();     break; 
-               case SP_ID       : SpId();       break; 
+               case SP_COMMAND  : SpCommand();  break;
+               case SP_CORE     : SpCore();     break;
+               case SP_ID       : SpId();       break;
 #ifdef MSC
                case SP_MSDOS    : SpMsdos();    break;
 #endif
@@ -612,7 +612,7 @@ PRIVATE int Serve ()
             }
          else
             ABORT((SE, "internal error, zero size write back"));
-            
+
          if( TerminateFlag == TRUE )
          {
 #ifdef RISCOS
@@ -642,14 +642,14 @@ PUBLIC void BreakHandler()
    signal(SIGINT, BreakHandler);
 #endif
 
-   fputc('\n', stderr); 
+   fputc('\n', stderr);
    while ( c == 0 )
       {
          fprintf(stderr,"%s: (x)exit, (s)hell or (c)ontinue? ", PROGRAM_NAME); fflush(stderr);
-         c = GetAKey(); 
+         c = GetAKey();
          fputc(c, stderr);
          if ( (c != 10) && (c != 13) )
-            fputc('\n', stderr); 
+            fputc('\n', stderr);
          fflush(stderr);
          switch(c)
             {
@@ -703,7 +703,7 @@ PUBLIC void BreakHandler()
                           else
                              CocoPops = 1;
                           break;
-   
+
                default:
                           c = 0;
                           break;
@@ -714,7 +714,7 @@ PUBLIC void BreakHandler()
 
 
 /*
- *   main 
+ *   main
  */
 
 
@@ -766,13 +766,13 @@ PUBLIC int main (argc, argv)
       printf("(analyse=%d error=%d verbose=%d link=%d reset=%d serve=%d load=%d coco=%d)\n", AnalyseSwitch, TestErrorSwitch, VerboseSwitch, LinkSwitch, ResetSwitch, ServeSwitch, LoadSwitch, CocoPops );
 
    DEBUG(("using \"%s\" as the boot file", BootFileName));
-      
+
    if ( *LinkName == 0 )
       {
          if ( ( ALinkName = (BYTE *)getenv("TRANSPUTER") ) != NULL )
             strcpy( (char*)LinkName, (char*)ALinkName );
       }
-      
+
    DEBUG(("and \"%s\" as the link name", LinkName));
 
    if ( ( TheLink = OpenLink( LinkName ) ) < 1 )
@@ -811,7 +811,7 @@ PUBLIC int main (argc, argv)
 
    if ( ServeSwitch )
       ExitStatus = Serve();
-   else   
+   else
       {
          if ( ResetSwitch || AnalyseSwitch || LoadSwitch || TestErrorSwitch )
             ExitStatus = HUNKY_DORY;
@@ -826,7 +826,7 @@ PUBLIC int main (argc, argv)
          ABORT((SE, "transputer error flag has been set"));
 
    signal(SIGINT, SIG_IGN);                    /*  dont want to be interrupted while closing  */
-   
+
    if ( CloseLink( TheLink ) < 1 )
       ABORT((SE, "unable to free transputer link"));
 
