@@ -24,6 +24,17 @@ screen section
 13:12.                  home and clear screen
 end of screen section
 
+# Keyboard codes are a bit odd on RO.
+#  1-26: Ctrl-A to Ctrl-Z
+#  8:    Backspace
+#  13:   Return
+#  27:   Escape
+#  30:   Home
+#  127:  Delete
+#
+# Codes >= 0x100 are translated into:
+#  27, (code AND &FF)
+#
 keyboard section
 2:127.          Delete  delete character
 6:27,143.       Up      cursor up
@@ -59,7 +70,7 @@ keyboard section
 51:27,157.      Sh-Rt   word right
 55:27,175.      C-Up    top of file
 56:27,174.      C-Dn    bottom of file
-62:9.           TAB     toggle hex
+62:9.           Ctl-I   toggle hex
 65:6.           Ctl-F   continue from
 66:2.           Ctl-B   toggle breakpoint
 67:27,132.      f4      search

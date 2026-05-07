@@ -27,14 +27,19 @@
  *      Keys[] is the circular buffer storing keypresses (as Wimp codes)
  *      KeyCount counts the number of characters in the buffer
  *      KeyPut and KeyGet are the insertion and removal indices
+ *      EscPending is set when the user presses the Escape key.
+ *        Because we use ESC (27) as the prefix for a special (>=0x100)
+ *        keycode, we send ESC twice. This is technically keycode 0x11B,
+ *        but RISC OS doesn't assign that code to a key.
  */
 
 #define KeyLength 256
 
-PRIVATE int Keys[KeyLength];
-PRIVATE int KeyCount = 0;
-PRIVATE int KeyPut   = 0;
-PRIVATE int KeyGet   = 0;
+PRIVATE int  Keys[KeyLength];
+PRIVATE int  KeyCount   = 0;
+PRIVATE int  KeyPut     = 0;
+PRIVATE int  KeyGet     = 0;
+PRIVATE BOOL EscPending = FALSE;
 
 #define ESC 27
 
@@ -66,6 +71,12 @@ PUBLIC VOID KeyPressed(int key)
 
 PUBLIC int PollKey(void)
 {
+  if (EscPending) {
+    /* If there's a pending 27,27 (from Escape key) send it and leave KeyCount alone */
+    EscPending = FALSE;
+    return ESC;
+  }
+
   if (WindowActive)
   {
     if (KeyCount == 0) return -1;
@@ -76,6 +87,14 @@ PUBLIC int PollKey(void)
       if (key >= 0x100)
       {
         Keys[--KeyGet] = key & 0xff;
+        return ESC;
+      }
+      if (key == ESC)
+      {
+        /* Escape key press. Return 27 now, queue another */
+        EscPending = TRUE;
+        if (KeyGet >= KeyLength) KeyGet = 0;
+        --KeyCount;
         return ESC;
       }
       if (KeyGet >= KeyLength)
@@ -101,7 +120,7 @@ PUBLIC BYTE GetAKey(void)
 #ifdef DWINDOW
     DWindow_Select(DWindow_Key);
 #endif
-    while (KeyCount == 0) event_process();
+    while (KeyCount == 0 && !EscPending) event_process();
 #ifdef DWINDOW
     DWindow_Select(DWindow_None);
 #endif

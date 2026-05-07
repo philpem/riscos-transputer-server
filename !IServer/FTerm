@@ -55,7 +55,7 @@ keyboard
 25:16.          Ctl-P   *close fold
 26:27,189.      CS-Rt   enter file *fold
 27:27,188.      CS-Lf   exit file  *fold
-28:27,27.       ESC ESC refresh
+28:27,27,27,27.   ESC ESC refresh
 # 29 means something different in FTerm...
 # 29:27,130.      f2      change file
 29:27,148.      Sh-f4   *search
@@ -82,16 +82,16 @@ keyboard
 # 47:27,183.      CS-f7   modify
 # 48:27,184.      CS-f8   resume
 # 49:27,185.      CS-f9   monitor
-40:27,48.       ESC 0   *tool 0
-41:27,49.       ESC 1   *tool 1
-42:27,49.       ESC 2   *tool 2
-43:27,49.       ESC 3   *tool 3
-44:27,49.       ESC 4   *tool 4
-45:27,49.       ESC 5   *tool 5
-46:27,49.       ESC 6   *tool 6
-47:27,49.       ESC 7   *tool 7
-48:27,49.       ESC 8   *tool 8
-49:27,49.       ESC 9   *tool 9
+40:27,27,48.    ESC 0   *tool 0
+41:27,27,49.    ESC 1   *tool 1
+42:27,27,50.    ESC 2   *tool 2
+43:27,27,51.    ESC 3   *tool 3
+44:27,27,52.    ESC 4   *tool 4
+45:27,27,53.    ESC 5   *tool 5
+46:27,27,54.    ESC 6   *tool 6
+47:27,27,55.    ESC 7   *tool 7
+48:27,27,56.    ESC 8   *tool 8
+49:27,27,57.    ESC 9   *tool 9
 50:27,156.      Sh-Lf   word left
 51:27,157.      Sh-Rt   word right
 52:27,187.      CS-Copy *delete word left
@@ -104,7 +104,7 @@ keyboard
 59:27,134.      f6      *pick
 60:27,150.      Sh-f6   *copy pick
 61:27,166.      Ct-f6   *put
-62:9.           TAB     toggle hex *toggle tabs
+62:9.           Ctl-I   toggle hex *toggle tabs
 63:27,177.      CS-f1   display key
 64:27,219.      Sh-f11  *previous file
 65:27,203.      f11     *next file
