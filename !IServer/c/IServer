@@ -96,6 +96,9 @@ EXTERN VOID SpId();
 EXTERN int  SpExit();
 EXTERN VOID SpUnknown();
 #endif
+#ifdef RISCOS
+EXTERN int  AFServe(void);
+#endif
 #ifdef MSC
 EXTERN VOID SpMsdos();
 #endif
@@ -146,6 +149,7 @@ PUBLIC BOOL ServeSwitch;
 PUBLIC BOOL LoadSwitch;
 PUBLIC BOOL CocoPops;
 #ifdef RISCOS
+PUBLIC BOOL AFServerSwitch = 0;
 PUBLIC BOOL WindowSwitch    = 0;
 PUBLIC BOOL ThrowbackSwitch = 0;
 PUBLIC char DesktopPath[160] = "";
@@ -330,6 +334,7 @@ PRIVATE VOID PrintHelp ()
    fprintf( stdout, "        SS            serve the link\n\n");
 #else
    fprintf( stdout, "        SS            serve the link\n");
+   fprintf( stdout, "        SF            serve the link using AFServer protocol\n");
    fprintf( stdout, "        ST            enable throwback\n");
    fprintf( stdout, "        SD            enable DDE compatibility\n");
    fprintf( stdout, "        SV path       search for file via path\n");
@@ -359,6 +364,7 @@ PRIVATE VOID ParseCommandLine ()
    LoadSwitch = 0;
    CocoPops = 0;
 #ifdef RISCOS
+   AFServerSwitch = 0;
    WindowSwitch = 0;
    ThrowbackSwitch = 0;
 #endif
@@ -421,6 +427,11 @@ PRIVATE VOID ParseCommandLine ()
 
                      case 'e' :
                      case 'E' :  ++s; ++TestErrorSwitch; break;
+
+#ifdef RISCOS
+                     case 'f' :
+                     case 'F' :  ++s; ++ServeSwitch; ++AFServerSwitch; break;
+#endif
 
                      case 'i' :
                      case 'I' :  ++s; ++VerboseSwitch; break;
@@ -810,7 +821,11 @@ PUBLIC int main (argc, argv)
 #endif
 
    if ( ServeSwitch )
+#ifdef RISCOS
+      ExitStatus = AFServerSwitch ? AFServe() : Serve();
+#else
       ExitStatus = Serve();
+#endif
    else
       {
          if ( ResetSwitch || AnalyseSwitch || LoadSwitch || TestErrorSwitch )

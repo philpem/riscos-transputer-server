@@ -1,0 +1,2546 @@
+/******************************************************************************
+*
+*  Alien File Server
+*
+*  14th October 1987.
+*
+*  Copyright INMOS Limited, 1987.
+*
+* Revision History in reverse order:
+*
+*  Rev 001  IAY  unknown date  - Suppress ``booting'' message
+*                             - Change version string  
+*
+*  Rev 002  JF   12-Apr-1989  - Support for Record-Level I/O
+*                             - Change version string
+*
+*  Rev 003  ADC  28-Jul-1989  - protocol changes for AK@EPCL.  I think all
+*                               the record stuff could be simplified a lot
+*                               now that end-of-record is explicitly flagged,
+*                               but this looked like the minimum change.
+*                             - fix apparent bug in record_truncate
+*
+*  Rev 004 NN    15-Aug-1989  - fix bug in record_read function. Reading zero
+*                               byte situation was ignored.
+*                             - changed version string
+*
+*  Rev 005 NN    01-Sep_1989  - In the case of being at the end of file dont
+*                               adjust the position of file pointer for writing.
+*
+*  Rev 006 NN    10-Sep-1989  - When writing to the terminal should not
+*                               terminate the file.
+*
+*  Rev 007 NN    10-Sep-1989  - Addition of a new service. "enquire file"
+*
+******************************************************************************/
+
+#define LINT_ARGS 1      /* Enable Compiler Parameter Checking */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
+#include <time.h>
+#ifndef RISCOS
+#include <sys/types.h>
+#include <sys/stat.h>
+#endif
+/* Rev 002 */
+#ifndef RISCOS
+#include <malloc.h>
+#endif
+#include "inmos.h"
+#include "iserver.h"
+#include "afserver.h"
+
+#ifdef RISCOS
+#define far
+#define fclose wfclose
+#define fread  wfread
+#define fwrite wfwrite
+#define fflush wfflush
+#define fgets  wfgets
+#define fputs  wfputs
+#define fseek  wfseek
+#define ftell  wftell
+#undef  feof
+#define feof   wfeof
+#undef  ferror
+#define ferror wferror
+#define unlink remove
+extern int   wfclose(FILE *);
+extern int   wfread (void *, int, int, FILE *);
+extern int   wfwrite(void *, int, int, FILE *);
+extern int   wfflush(FILE *);
+extern char* wfgets (char *, int, FILE *);
+extern int   wfputs (char *, FILE *);
+extern int   wfseek (FILE *, int, int);
+extern long  wftell (FILE *);
+extern int   wfeof  (FILE *);
+extern int   wferror(FILE *);
+extern void  TranslateFilename(BYTE *, BOOL);
+extern BYTE  GetAKey(void);
+extern int   PollKey(void);
+extern int   TheLink;
+extern BOOL  TestErrorSwitch;
+extern BOOL  WindowSwitch;
+extern BOOL  ThrowbackSwitch;
+extern BOOL  CocoPops;
+extern int   ReadLink(int, BYTE *, unsigned int, int);
+extern int   WriteLink(int, BYTE *, unsigned int, int);
+extern int   TestError(int);
+extern void  StartWindow(void);
+extern void  EndWindow(void);
+extern void  Throwback_Exit(void);
+#endif
+
+extern int errno;
+#ifndef RISCOS
+extern unsigned int link_base;
+#endif
+
+/* Transputer command line buffer. Contains parameters from the server */
+/* command line which the server does not recognise. */
+
+static char tcom[COMMAND_LINE_LENGTH];
+
+static int tcominptr = 0, tcomoutptr = 0;
+
+static int terminate_code;                   /* Server result */
+
+static int transputer_result = 0;            /* Result from transputer */
+
+static int command;
+
+static int alien_option_flag =
+#ifdef RISCOS
+    0x1;                                     /* RISC OS filename translation */
+#else
+    0x0;                                     /* Type of alien storage scheme */
+#endif
+
+static int boot_file_exists = FALSE;         /* If true, use boot file */
+
+/* Rev 001: version 1.3.2 */
+/* Rev 002: version RLIO.1 */
+/* Rev 003: version RLIO.2 */
+/* Rev 004: version RLIO.3 */
+/* change version string to include date last changed at 3L */
+static char version[] =
+#ifdef RISCOS
+   "RISC OS Alien File Server Inmos V1.3 (14th October 1987) / 3L V1.3.7\n";
+#endif
+#ifdef IBMserver
+   "IBM PC Filer server Inmos V1.3 (14th October 1987) / 3L V1.3.7\n";
+#endif
+#ifdef NECserver
+   "NEC PC Filer server Inmos V1.3 (14th October 1987) / 3L V1.3.7\n";
+#endif
+
+static char copyright[] = "Copyright INMOS Limited, 1985\n";
+
+static struct STREAM_DESC filers[N_STREAMS];
+
+int make_af_err(int);
+int tcomread(char *, int);
+
+/* Rev 002: open_types for new access methods */
+static char *open_types [MAX_OPEN_MODE+1]
+  [MAX_EXIST_MODE+1][MAX_ACCESS_METHOD+1] =
+{
+{{"rb", "rt", "rb", "rb", "rb", "rb"}, {"rb", "rt", "rb", "rb", "rb", "rb"}}, 
+{{"r+b","r+t","r+b","r+b","r+b","r+b"},{"wb", "wt", "wb", "wb", "wb", "wb"}},
+{{"r+b","r+t","r+b","r+b","r+b","r+b"},{"w+b","w+t","w+b","w+b","w+b","w+b"}}
+};
+
+/* Server global variables */
+
+int running;                   /* Server is running flag */
+
+int test_error_flag = FALSE;   /* If true, test error flag */
+
+#ifdef RISCOS
+static int af_read_bytes(buffer, length)
+    char *buffer;
+    int length;
+{
+    int got = ReadLink(TheLink, (BYTE *)buffer, length, 0);
+    if (got != length)
+        ABORT((SE, "AFServer protocol error reading %d bytes, got %d", length, got));
+    return got;
+}
+
+static void af_write_bytes(buffer, length)
+    char *buffer;
+    int length;
+{
+    int sent = WriteLink(TheLink, (BYTE *)buffer, length, 0);
+    if (sent != length)
+        ABORT((SE, "AFServer protocol error writing %d bytes, sent %d", length, sent));
+}
+
+int byte_from_link()
+{
+    unsigned char b;
+    af_read_bytes((char *)&b, 1);
+    return (int)b;
+}
+
+void byte_to_link(b)
+    int b;
+{
+    unsigned char c = (unsigned char)b;
+    af_write_bytes((char *)&c, 1);
+}
+
+int word_from_link()
+{
+    int lo = byte_from_link();
+    int hi = byte_from_link();
+    (void)byte_from_link();
+    (void)byte_from_link();
+    return lo | (hi << 8);
+}
+
+void word_to_link(w)
+    int w;
+{
+    byte_to_link(w & 0xff);
+    byte_to_link((w >> 8) & 0xff);
+    if (w & 0x8000)
+    {
+        byte_to_link(0xff);
+        byte_to_link(0xff);
+    }
+    else
+    {
+        byte_to_link(0);
+        byte_to_link(0);
+    }
+}
+
+void long_word_to_link(w)
+    long int w;
+{
+    int i;
+    for (i = 0; i < 4; i++)
+    {
+        byte_to_link((int)(w & 0xff));
+        w >>= 8;
+    }
+}
+
+long int long_word_from_link()
+{
+    long int result = 0L;
+    int i;
+    for (i = 0; i < 32; i += 8)
+        result |= (((long int)byte_from_link()) << i);
+    return result;
+}
+
+void get_long_slice(length, slice)
+    int length;
+    char far *slice;
+{
+    if (length > 0)
+        af_read_bytes((char *)slice, length);
+}
+
+int trunc_slice_from_link(max_length, str)
+    int max_length;
+    char *str;
+{
+    int i, length, keep;
+
+    length = word_from_link();
+    keep = (length > max_length) ? max_length : length;
+    for (i = 0; i < keep; i++)
+        str[i] = (char)byte_from_link();
+    for (; i < length; i++)
+        (void)byte_from_link();
+#ifdef REV_A_FIX
+    if (length == 1)
+        (void)byte_from_link();
+#endif
+    return keep;
+}
+
+void slice_to_link(length, slice)
+    int length;
+    char *slice;
+{
+    int i, real_len = length;
+    word_to_link(real_len);
+#ifdef REV_A_FIX
+    if (real_len == 1) real_len = 2;
+#endif
+    for (i = 0; i < length; i++)
+        byte_to_link(slice[i]);
+#ifdef REV_A_FIX
+    if (length == 1)
+        byte_to_link(0);
+#endif
+}
+
+void long_slice_to_link(length, slice)
+    long int length;
+    char far *slice;
+{
+    long int i, real_len = length;
+    long_word_to_link(real_len);
+#ifdef REV_A_FIX
+    if (real_len == 1) real_len = 2;
+#endif
+    for (i = 0; i < length; i++)
+        byte_to_link(slice[i]);
+#ifdef REV_A_FIX
+    if (length == 1)
+        byte_to_link(0);
+#endif
+}
+
+void long_slice_from_link(length, slice)
+    long int *length;
+    char far *slice;
+{
+    long int real_len, i;
+    *length = real_len = long_word_from_link();
+    for (i = 0; i < real_len; i++)
+        slice[i] = (char)byte_from_link();
+#ifdef REV_A_FIX
+    if (real_len == 1)
+        (void)byte_from_link();
+#endif
+}
+#endif
+
+void terminate_server (t_code)
+    int t_code;
+/* Set flags to terminate the server. */
+{
+    terminate_code = t_code;
+    running = FALSE;
+}
+int file_exists (file_str)
+    char *file_str;
+/* Return TRUE if the file whose name is in file_str exists,
+   FALSE otherwise. */
+{
+    FILE *stream;
+#ifdef RISCOS
+    TranslateFilename((BYTE *)file_str, FALSE);
+#endif
+    if ( (stream = fopen (file_str, "r")) != NULL )
+    {
+        fclose (stream);
+        return (TRUE);
+    }
+    else
+        return (FALSE);
+}
+
+/* Rev 002 */
+
+/*  File operations
+**  May be replaced later by direct calls on MS-DOS functions
+**  All return F_OK if end normally, OPERATIONFAILED_ERR otherwise; also
+**  set streamp->result.   file_read and file_reads can return F_EOF too
+*/
+
+/*  file_position                                                
+**  This function positions a file to a location.   The location is
+**  specified by an offset and an origin, like the C fseek function.
+**  The origins are as follows:
+**     EOF_POSITION   End of file.   (NB: on a text file, the
+**                    next read will get EOF, the next write will
+**                    overwrite the CTRL/Z
+**     BOF_POSITION   The first char in the file
+**     REL_POSITION   The current position
+**  With EOF_POSITION, only an offset of 0 will work.
+*/
+int file_position (streamp, offset, origin)
+struct STREAM_DESC *streamp;
+int origin;
+long offset;
+{
+   int res=F_OK, ans=0;
+   long pos=0L, reclen=0L;
+   if ((streamp->access_m == BINARYSEQUENTIAL_ACCESS) &&
+       (origin == EOF_POSITION) && (offset == 0L)) {
+      while (fseek(streamp->fileptr, pos, BOF_POSITION) == 0 &&
+             fread (&reclen, 1, 4, streamp->fileptr) == 4    &&
+             reclen != -1L)
+         pos += reclen + 8;
+      clearerr (streamp->fileptr);
+      if (reclen == -1L)
+         pos = -4L;
+      else
+         pos = 0L;
+      ans = fseek (streamp->fileptr, pos, REL_POSITION);
+   } else {
+      ans = fseek (streamp->fileptr, offset, origin);
+   }
+   if (ans != 0) {
+      res = OPERATIONFAILED_ERR;
+      streamp->result = make_af_err(ferror(streamp->fileptr));
+   }
+   return (res);
+}
+
+/*  file_tell_position
+**  Return current position of file
+*/
+long file_tell_position (streamp)
+struct STREAM_DESC *streamp;
+{
+   return (ftell (streamp->fileptr));
+}
+
+/*  file_write
+**  Write a sequence of bytes to a file
+*/
+int file_write (streamp, buffer, buflen)
+struct STREAM_DESC *streamp;
+char *buffer;
+int buflen;
+{
+   int res=F_OK, ans;
+   if (streamp->state != WRITING_STATE)
+      fseek (streamp->fileptr, 0L, REL_POSITION);
+   ans = fwrite (buffer, 1, buflen, streamp->fileptr);
+   if (streamp->state != WRITING_STATE)
+      fseek (streamp->fileptr, 0L, REL_POSITION);
+   if (ans != buflen) {
+      streamp->result = make_af_err(ferror(streamp->fileptr));
+      res = OPERATIONFAILED_ERR;
+   }
+   return (res);
+}
+
+/*  file_read
+**  Read a sequence of bytes from a file
+*/
+int file_read (streamp, buffer, buflen, bytes_read)
+struct STREAM_DESC *streamp;
+char *buffer;
+int buflen, *bytes_read;
+{
+   int res=F_OK, ans;
+   *bytes_read = fread(buffer, 1, buflen, streamp->fileptr);
+   if (feof(streamp->fileptr)) {
+      streamp->result = F_EOF;
+      res = F_EOF;
+   } else {
+      ans = ferror(streamp->fileptr);
+      streamp->result = make_af_err(ferror(streamp->fileptr));
+      if (ans != 0)
+         res = OPERATIONFAILED_ERR;
+   }
+   return (res);
+}
+
+/*  file_reads
+**  Read a string from a file
+**  bytes_read returned includes NL but excludes \0
+*/
+int file_reads (streamp, buffer, buflen, bytes_read)
+struct STREAM_DESC *streamp;
+char *buffer;
+int buflen, *bytes_read;
+{
+   int res=F_OK, ans, temp, t;
+   if (fgets (buffer, buflen+1, streamp->fileptr) == NULL) {
+      *bytes_read = 0;
+      if (feof(streamp->fileptr)) {
+         streamp->result = F_EOF;
+         res = F_EOF;
+      } else {
+         ans = ferror(streamp->fileptr);
+         streamp->result = make_af_err(ferror(streamp->fileptr));
+         if (ans != 0)
+            res = OPERATIONFAILED_ERR;
+      }
+   } else {
+      *bytes_read = strlen (buffer) -1;
+      if (*buffer == CONTROL_Z) {
+         *bytes_read = 0;
+         streamp->result = F_EOF;
+         res = F_EOF;
+      } else if (buffer [*bytes_read-1] == CR)
+         *bytes_read -= 1;
+   }
+   return (res);
+}
+
+/* file_backspace
+** This will backspace binseq or txtseq files
+** All other kinds -> OPERATIONFAILED_ERR
+** Multiple backspaces allowed.  Attempt to backspace when
+** at start of file -> OPERATIONFAILED_ERR
+*/
+int file_backspace (streamp)
+struct STREAM_DESC *streamp;
+{
+   int res = F_OK, bytes_read, ch;
+   long reclen;
+   if (streamp->access_m == BINARYSEQUENTIAL_ACCESS) {
+      
+      if ((res = file_position(streamp, -4L, REL_POSITION)) == F_OK)
+      if ((res = file_read(streamp, &reclen, 4, &bytes_read)) == F_OK) {
+         if (reclen == -1)
+            reclen = 4;
+         else
+            reclen += 8;
+         res = file_position(streamp, (long)(-reclen), REL_POSITION);
+      }
+      
+   } else if (streamp->access_m == TEXTSEQUENTIAL_ACCESS) {
+               
+      if (fseek(streamp->fileptr, -1L, REL_POSITION) == 0) {
+         ch = fgetc (streamp->fileptr);
+         do {
+            if (fseek (streamp->fileptr, -2L, REL_POSITION) != 0) {
+               /* we have reached start of file */
+               rewind(streamp->fileptr);    /* clear error etc */
+               break;
+            }
+            ch = fgetc (streamp->fileptr);
+         } while (ch != LF);
+      } else {
+         /* was as start of the file to begin with  */
+         rewind(streamp->fileptr);   /* clear error etc */
+         res = OPERATIONFAILED_ERR;
+      }
+         
+   } else
+      /* not one of the types we can deal with */
+      res = OPERATIONFAILED_ERR;
+
+   return (res);
+}
+       
+/* Terminate a record */
+int terminate_record (streamp)
+struct STREAM_DESC *streamp;
+{
+   int res = F_OK;
+   long minus_one = -1L;
+   int newl = 0x0a0d;  /* CR-LF */
+   if (streamp->access_m == BINARYSEQUENTIAL_ACCESS) {
+      res = file_write (streamp, &streamp->transferred, 4);
+      if (streamp->recl == -1) {
+         res += file_position (streamp,
+                   (long)(-(streamp->transferred + 8)), REL_POSITION);
+         res += file_write (streamp, &streamp->transferred, 4);
+         res += file_position (streamp,
+                   (long)(streamp->transferred + 4), REL_POSITION);
+      }
+   } else if (streamp->access_m == TEXTBYTESTREAM_ACCESS ||
+             streamp->access_m == TEXTSEQUENTIAL_ACCESS) {
+      if (streamp->suppress_nl)
+         streamp->suppress_nl = FALSE;
+      else
+         res += file_write (streamp, &newl, 2);
+   }   
+   return (res);
+}
+
+/* Write an end-of-file (if there is any such thing)
+** The second parameter controls where the file is left
+*/
+int terminate_file (streamp, leave_after_eof)
+struct STREAM_DESC *streamp;
+int leave_after_eof;
+{
+   int res = F_OK, len = 0;
+   long minus_one = -1L;
+   char ctrlz = CONTROL_Z, *p;
+   if (streamp->access_m == BINARYSEQUENTIAL_ACCESS) {
+      p = (char *)&minus_one; len=4;
+   } else if (streamp->access_m == TEXTBYTESTREAM_ACCESS ||
+             streamp->access_m == TEXTSEQUENTIAL_ACCESS) {
+      p = &ctrlz; len=1;
+   } else return (res);
+   if ((res = file_write (streamp, p, len)) == F_OK)
+   if (!leave_after_eof)
+      res = file_position (streamp, (long)(-len), REL_POSITION);
+   return (res);
+}
+
+/* Adjust state */
+int adjust_state (streamp, new_state)
+struct STREAM_DESC *streamp;
+int new_state;
+{
+   int res = F_OK;
+   long minus_one = -1L;
+   char newl = LF;
+   if (streamp->state == WRITING_STATE) {
+      res = terminate_record (streamp);
+/* Rev 006      if (res == F_OK && new_state != WRITING_STATE ) */
+
+      if (res == F_OK && new_state != WRITING_STATE    /* Rev 006 begin */
+#ifdef RISCOS
+                  && streamp->lifetime_m != SPECIAL) {  /* Rev 006 end */
+#else
+                  && !isatty(fileno(streamp->fileptr))) {  /* Rev 006 end */
+#endif
+         res = terminate_file (streamp, FALSE);
+      }
+   } else if ((streamp->state == READING_STATE) &&
+              (streamp->access_m == BINARYSEQUENTIAL_ACCESS))
+       if (streamp->recl != -1)                    /* Rev 005 */
+         res = file_position (streamp, 
+                           (long)((streamp->recl-streamp->transferred)+4),
+                           REL_POSITION);
+   if (res != F_OK)
+      res = OPERATIONFAILED_ERR;
+   else
+      streamp->state = new_state;
+   return (res);
+}
+
+/* end of Rev 002 */
+
+
+int filer_close_file (streamp, close_mode)
+    int close_mode;
+    struct STREAM_DESC *streamp;
+{
+    int res = F_OK;
+    if ( (close_mode >= 0) && (close_mode <= MAX_CLOSE_OPTION) )
+    {
+        if (streamp->lifetime_m != SPECIAL)
+        {
+/* Rev 002 */
+            if ((adjust_state(streamp, WAITING_STATE) == F_OK) &&
+               (fclose (streamp->fileptr) == 0))
+/* end of Rev 002 */               
+            {
+                if ((close_mode == CLOSEDEL_OPTION) || (streamp->lifetime_m == TEMPORARY))
+                {
+                    if (unlink (streamp->name) != 0)
+                        res = OPERATIONFAILED_ERR;
+                };
+                streamp->inuse = FALSE;
+            }
+            else
+            {
+                res = OPERATIONFAILED_ERR;
+                /* Remove our reference anyway */
+                streamp->inuse = FALSE;
+            };
+        }
+        else
+        {
+            /* Rev 002 */
+            if (streamp->state == WRITING_STATE)
+                res = terminate_record (streamp);
+            /* end of Rev 002 */
+            streamp->inuse = FALSE; /* Just remove our reference */
+        }
+    }
+    else
+        res = INVALIDCLOSEOPTION_ERR;
+    return (res);
+}
+void filer_close ()
+{
+    int i;
+    for (i = 0; i < N_STREAMS; i++)
+        if ( filers[i].inuse )
+        {
+            filer_close_file ( &(filers[i]), CLOSE_OPTION );
+            filers[i].inuse = FALSE;
+        };
+}
+void record_to_string (rec, len, str)
+    int len;
+    char *rec, *str;
+{
+    int i;
+    for (i = 0; i < len; i++)
+      *str++ = rec[i];
+    *str = '\0';
+}
+void string_to_record (str, rec, len)
+    int  *len;
+    char *str, *rec;
+{
+    int i = 0;
+
+    while (*str != '\0')
+        rec[i++] = *str++;
+    *len = i;
+}
+int find_stream ()
+{
+    int i = 0;
+    int found = FALSE;
+
+    while( (i < N_STREAMS) && (found == FALSE) )
+    {
+        if ((filers[i].inuse) == FALSE)
+            found = TRUE;
+        else
+            i++;
+    };
+    if (found)
+        return (i);
+    else
+        return (INVALID_STREAM);
+}
+int valid_stream (n)
+    int n;
+{
+    if ( (n >= 0) && (n < N_STREAMS) )
+        if (filers[n].inuse)
+            return (TRUE);
+    return (FALSE);
+}
+int make_file_name (name)
+    char *name;
+{
+    static int temp_id = 0;
+
+    do
+    {
+        sprintf(name, "af%04d", temp_id++);
+    }
+    while (file_exists(name) && temp_id < 10000);
+    if (temp_id >= 10000)
+        return FALSE;
+    return (TRUE);
+}
+int make_af_err (c_err)
+    int c_err;
+{
+    return (HOST_ERROR_BASE - c_err);
+}
+int seek_file_length (fptr, length)
+    FILE *fptr;
+    long *length;
+{
+    long curpos;
+    int result = F_OK;
+
+    curpos = ftell(fptr);                      /* Remember where we are    */
+    if (fseek(fptr, 0L, 2) == 0)               /* Go to the end to find    */
+        *length = ftell(fptr);                 /* where it is              */
+    else
+        result = OPERATIONFAILED_ERR;
+    if (fseek(fptr, curpos, 0) != 0)            /* Go back to where */
+        result = OPERATIONFAILED_ERR;          /* We were          */
+    return (result);
+}
+int tag_from_link ()
+{
+#ifdef REV_A_FIX
+    return (word_from_link());
+#else
+    return (byte_from_link());
+#endif
+}
+int read_integer (v)
+    int *v;
+{
+    if (tag_from_link() == INT32_VALUE)
+    {
+        *v = word_from_link ();
+        return (TRUE);
+    } else
+    {
+        terminate_server (T_BAD_INT32);
+        fprintf (stderr,"Last command = %d\n", command);
+        return (FALSE);
+    };
+}
+extern long int long_word_from_link();
+
+int read_long_integer (v)
+    long int *v;
+{
+    if (tag_from_link() == INT32_VALUE)
+    {
+        *v = long_word_from_link ();
+        return (TRUE);
+    } else
+    {
+        terminate_server (T_BAD_INT32);
+        fprintf (stderr,"Last command = %d\n", command);
+        return (FALSE);
+    };
+}
+
+int read_record (len, buffer)
+    int *len;
+    char *buffer;
+{
+    int t = tag_from_link ();
+
+    if (t == NILRECORD_VALUE)
+    {
+        *len = 0;
+        return (TRUE);
+    } else
+        if (t == RECORD32_VALUE)
+        {
+            *len = trunc_slice_from_link (RECORD_LENGTH, buffer);
+            return (TRUE);
+        } else
+        {
+            fprintf (stderr, "Last command = %d\n", command);
+            terminate_server (T_BAD_RECORD);
+            return (FALSE);
+        };
+}
+int read_long_record (len, buffer)
+    long int *len;
+    char far *buffer;
+{
+    int t = tag_from_link ();
+
+    if (t == NILRECORD_VALUE)
+    {
+        *len = 0;
+        return (TRUE);
+    } else
+        if (t == RECORD32_VALUE)
+        {
+            long_slice_from_link (len, buffer);
+            return (TRUE);
+        } else
+        {
+            fprintf (stderr, "Last command = %d\n", command);
+            terminate_server (T_BAD_RECORD);
+            return (FALSE);
+        };
+}
+void tag_to_link (tag)
+    int tag;
+{
+#ifdef REV_A_FIX
+    word_to_link (tag);
+#else
+    byte_to_link (tag);
+#endif
+}
+void write_integer (n)
+    int n;
+{
+    tag_to_link (INT32_VALUE);
+    word_to_link (n);
+}
+void write_long_integer (n)
+    long int n;
+{
+    tag_to_link (INT32_VALUE);
+    long_word_to_link (n);
+}
+void write_record (len, buffer)
+    int len;
+    char *buffer;
+{
+    if (len == 0)
+        tag_to_link (NILRECORD_VALUE);
+    else
+    {
+        tag_to_link (RECORD32_VALUE);
+        slice_to_link (len, buffer);
+    };
+}
+void write_long_record (len, buffer)
+    long int len;
+    char far *buffer;
+{
+    if (len == 0)
+        tag_to_link (NILRECORD_VALUE);
+    else
+    {
+        tag_to_link (RECORD32_VALUE);
+        long_slice_to_link (len, buffer);
+    };
+}
+
+
+void open_temp ()
+{
+    int res = F_OK;
+    int stream_id = INVALID_STREAM;
+    int access_method;
+    long record_length;
+    char *bufferp;                                              /* Rev 002 */
+
+    if (read_integer (&access_method))
+    if (read_long_integer (&record_length))
+    {
+        if ((access_method >= 0) && (access_method <= MAX_ACCESS_METHOD))
+        {
+            stream_id = find_stream ();
+            if (stream_id >= 0)
+            {
+                struct STREAM_DESC *streamp = &filers[stream_id];
+                if (make_file_name (streamp->name))
+                {
+                    char *type = open_types[UPDATE_MODE][NEW_FILE][access_method];
+                    FILE *fptr;
+
+                    fptr = fopen (streamp->name, type);
+
+                    if (fptr != NULL)
+                    {
+                        streamp->inuse = TRUE;
+                        streamp->fileptr = fptr;
+                        streamp->open_m = UPDATE_MODE;
+                        streamp->exist_m = NEW_FILE;
+                        streamp->access_m = access_method;
+                        streamp->lifetime_m = TEMPORARY;
+                        streamp->result = F_OK;
+/* Rev 002 */           streamp->recl = record_length;
+/* Rev 002 */           streamp->state = WAITING_STATE;
+/* Rev 002 */           streamp->suppress_nl = FALSE;
+/* Rev 002 */           if (access_method == TEXTSEQUENTIAL_ACCESS)
+/* Rev 002 */           {
+/* Rev 002 */               bufferp = malloc (TEXTSEQRECL_MAX + 2);
+/* Rev 002 */               if (bufferp == NULL)
+/* Rev 002 */                   terminate_server(T_OUT_OF_MEMORY);
+/* Rev 002 */           }
+/* Rev 002 */           else
+/* Rev 002 */               bufferp = NULL;
+/* Rev 002 */           streamp->text_buff = bufferp;
+                    }
+                    else
+                        res = OPERATIONFAILED_ERR;
+                }
+                else
+                    res = OPERATIONFAILED_ERR;
+            }
+            else
+                res = NOFREECHANNEL_ERR;
+        }
+        else
+            res = INVALIDACCESSMETHOD_ERR;
+        write_integer (stream_id);
+        write_integer (res);
+    };
+}
+void open_file (lifetime)
+    int lifetime;
+{
+    int len = 0;
+    int res = F_OK;
+    char filename [FILE_NAME_LENGTH];
+    int access_method, open_mode, exist_mode;
+    long record_length;
+    int append_flag, carrcon_flag;                               /* Rev 002 */
+
+    if (read_record (&len, filename))
+    if (read_integer (&access_method))
+    if (read_integer (&open_mode))
+    if (read_integer (&exist_mode))
+    if (read_long_integer (&record_length))
+    {
+        int stream = INVALID_STREAM;
+
+        if ((access_method >= 0) && (access_method <= MAX_ACCESS_METHOD))
+        {
+            if ((open_mode >= 0) && (open_mode <= MAX_OPEN_MODE))
+            {
+                if ((exist_mode >= 0) && (exist_mode <= MAX_EXIST_MODE))
+                {
+                    stream = find_stream ();
+                    if (stream >= 0)
+                    {
+                        struct STREAM_DESC *streamp = &filers[stream];
+                        record_to_string (filename, len, streamp->name);
+#ifdef RISCOS
+                        TranslateFilename((BYTE *)streamp->name,
+                                          (open_mode != READ_MODE) || (exist_mode & NEW_FILE));
+#endif
+
+                        {
+                            char *type;
+                            FILE *fptr;
+
+/* Rev 002 */               /* extract bits from exist_mode */
+/* Rev 002 */               append_flag = ((exist_mode&0x2) != 0);
+/* Rev 002 */               carrcon_flag= ((exist_mode&0x4) != 0);
+/* Rev 002 */               exist_mode &= 0x1;
+                            type = open_types[open_mode]
+                                             [exist_mode][access_method];
+                            fptr = fopen (streamp->name, type);
+
+                            if (fptr != NULL)
+                            {
+                                streamp->inuse = TRUE;
+                                streamp->fileptr = fptr;
+                                streamp->open_m = open_mode;
+                                streamp->exist_m = exist_mode;
+                                streamp->access_m = access_method;
+                                streamp->lifetime_m = lifetime;
+                                streamp->result = F_OK;
+/* Rev 002 */                   streamp->recl = record_length;
+/* Rev 002 */                   streamp->state = WAITING_STATE;
+/* Rev 002 */                   streamp->suppress_nl = FALSE;
+/* Rev 002 */                   streamp->text_buff = NULL;
+/* Rev 002 */                   if (append_flag)
+/* Rev 002 */                   {
+/* Rev 002 */                       res = file_position (streamp,
+/* Rev 002 */                                            0L, EOF_POSITION);
+/* Rev 002 */                   }
+                            }
+                            else
+                                res = OPERATIONFAILED_ERR;
+                        };
+                    }
+                    else
+                        res = NOFREECHANNEL_ERR;
+                }
+                else
+                    res = INVALIDEXISTMODE_ERR;
+            }
+            else
+                res = INVALIDOPENMODE_ERR;
+        }
+        else
+            res = INVALIDACCESSMETHOD_ERR;
+
+        write_integer (stream);
+        write_integer (res);
+    };
+}
+void open_stream (open_mode)
+    int open_mode;
+{
+    int res = F_OK;
+    int std_stream_no;
+    int stream_id = INVALID_STREAM;
+
+    if (read_integer(&std_stream_no))
+    {
+        if (open_mode == S_INPUT)
+        {
+            switch (std_stream_no)
+            {
+                case 0:
+                    stream_id = find_stream ();
+                    if (stream_id >= 0)
+                    {
+                        struct STREAM_DESC *streamp = &filers[stream_id];
+
+                        streamp->inuse = TRUE;
+                        strcpy (streamp->name, "stdin");
+                        streamp->fileptr = stdin;
+                        streamp->open_m = READ_MODE;
+                        streamp->exist_m = OLD_FILE;
+                        streamp->access_m = TEXTBYTESTREAM_ACCESS;
+                        streamp->lifetime_m = SPECIAL;
+                        streamp->result = F_OK;
+/* Rev 002 */           streamp->recl = TEXTSEQRECL_MAX;
+/* Rev 002 */           streamp->state = WAITING_STATE;
+/* Rev 002 */           streamp->suppress_nl = FALSE;
+/* Rev 002 */           streamp->text_buff = NULL;
+                    }
+                    else
+                        res = NOFREECHANNEL_ERR;
+                    break;
+                case 1:
+                    stream_id = PARAM_STREAM;
+                    break;
+                default:
+                    res = INVALIDSTDSTREAM_ERR;
+            };
+        }
+        else if (open_mode == S_OUTPUT)
+        {
+            switch (std_stream_no)
+            {
+                case 0:
+                    stream_id = find_stream ();
+                    if (stream_id >= 0)
+                    {
+                        struct STREAM_DESC *streamp = &filers[stream_id];
+
+                        streamp->inuse = TRUE;
+                        strcpy (streamp->name, "stdout");
+                        streamp->fileptr = stdout;
+                        streamp->open_m = WRITE_MODE;
+                        streamp->exist_m = OLD_FILE;
+                        streamp->access_m = TEXTBYTESTREAM_ACCESS;
+                        streamp->lifetime_m = SPECIAL;
+                        streamp->result = F_OK;
+/* Rev 002 */           streamp->recl = TEXTSEQRECL_MAX;
+/* Rev 002 */           streamp->state = WAITING_STATE;
+/* Rev 002 */           streamp->suppress_nl = FALSE;
+/* Rev 002 */           streamp->text_buff = NULL;
+                    }
+                    else
+                        res = NOFREECHANNEL_ERR;
+                    break;
+                case 1:
+                    stream_id = find_stream ();
+                    if (stream_id >= 0)
+                    {
+                        struct STREAM_DESC *streamp = &filers[stream_id];
+
+                        streamp->inuse = TRUE;
+                        strcpy (streamp->name, "stderr");
+                        streamp->fileptr = stderr;
+                        streamp->open_m = WRITE_MODE;
+                        streamp->exist_m = OLD_FILE;
+                        streamp->access_m = TEXTBYTESTREAM_ACCESS;
+                        streamp->lifetime_m = SPECIAL;
+                        streamp->result = F_OK;
+                    }
+                    else
+                        res = NOFREECHANNEL_ERR;
+                    break;
+                default:
+                    res = INVALIDSTDSTREAM_ERR;
+            };
+        };
+        write_integer (stream_id);
+        write_integer (res);
+    };
+}
+void close_stream ()
+{
+    int res = F_OK;
+    int close_mode;
+    int stream_id = INVALID_STREAM;
+
+    if (read_integer(&stream_id))
+    if (read_integer(&close_mode))
+    {
+        if (valid_stream (stream_id))
+           res = filer_close_file (&(filers[stream_id]), close_mode);
+        else
+        {
+            if (stream_id == PARAM_STREAM)
+                tcomoutptr = 0;
+            else
+                res = INVALIDSTREAMID_ERR;
+        };
+        write_integer (res);
+    };
+}
+void read_block ()
+{
+    int res = F_OK;
+    int record_len = 0;
+    int bytes_read = 0;
+    int stream_id = INVALID_STREAM;
+    char buffer[RECORD_LENGTH + 1];
+
+    if (read_integer (&stream_id))
+    if (read_integer (&record_len))
+    {
+        if (valid_stream (stream_id))
+        {
+            struct STREAM_DESC *streamp = &filers[stream_id];
+
+            if ((record_len >= 0) && (record_len <= RECORD_LENGTH))
+            {
+                if (streamp->lifetime_m == SPECIAL)
+                {
+                    if (fgets(buffer, record_len + 1, streamp->fileptr) != NULL)
+                        bytes_read = strlen(buffer);
+                }
+                else
+                {
+                    bytes_read = fread(buffer, 1, record_len, streamp->fileptr);
+                };
+
+                if (feof(streamp->fileptr))
+                {
+                    streamp->result = F_EOF;
+                    res = F_EOF;
+                }
+                else
+                {
+                    int r = ferror(streamp->fileptr);
+                    streamp->result = make_af_err(r);
+                    if (r != 0)
+                        res = OPERATIONFAILED_ERR;
+                };
+            }
+            else
+                res = INVALIDRECORDLENGTH_ERR;
+        }
+        else
+        {
+            if (stream_id == PARAM_STREAM)
+            {
+                if ((record_len >=0) && (record_len <= RECORD_LENGTH))
+                {
+                    bytes_read = tcomread(buffer, record_len);
+                    if (bytes_read < record_len)
+                        res = F_EOF;
+                }
+                else
+                    res = INVALIDRECORDLENGTH_ERR;
+            }
+            else
+                res = INVALIDSTREAMID_ERR;
+        };
+        write_record (bytes_read, buffer);
+        write_integer (res);
+    };
+}
+void write_block ()
+{
+    int res = F_OK;
+    int record_len = 0;
+    int bytes_written = 0;
+    int stream_id = INVALID_STREAM;
+    char buffer [RECORD_LENGTH];
+
+    if (read_integer (&stream_id))
+    if (read_record (&record_len, buffer))
+    {
+        if (valid_stream (stream_id))
+        {
+            struct STREAM_DESC *streamp = &filers[stream_id];
+            bytes_written = fwrite (buffer, 1, record_len, streamp->fileptr);
+            if (bytes_written != record_len)
+            {
+                streamp->result = make_af_err(ferror(streamp->fileptr));
+                res = OPERATIONFAILED_ERR;
+            };
+        }
+        else
+            res = INVALIDSTREAMID_ERR;
+        write_integer (bytes_written);
+        write_integer (res);
+    };
+}
+void stream_seek ()
+{
+    int res = F_OK;
+    long int offset = 0;
+    int stream_id = INVALID_STREAM;
+
+    if (read_integer (&stream_id))
+    if (read_long_integer (&offset))
+    {
+        if (valid_stream (stream_id))
+        {
+            struct STREAM_DESC *streamp = &filers[stream_id];
+            int r;
+
+            if ((r = fseek(streamp->fileptr, offset, 0)) != 0)
+            {
+                streamp->result = make_af_err(r);
+                res = OPERATIONFAILED_ERR;
+            }
+            else
+                streamp->result = F_OK;
+        }
+        else
+        {
+            if (stream_id == PARAM_STREAM)
+                res = NOSEEKPOSSIBLE_ERR;
+            else
+                res = INVALIDSTREAMID_ERR;
+        };
+        write_integer (res);
+    };
+}
+void stream_file ()
+{
+    int stream_id;
+
+    if (read_integer (&stream_id))
+    {
+        int len = 0, res = F_OK;
+        char filename[RECORD_LENGTH];
+
+        if (valid_stream(stream_id))
+        {
+            struct STREAM_DESC *streamp = &filers[stream_id];
+            string_to_record (streamp->name, filename, &len);
+        }
+        else
+        {
+            if (stream_id == PARAM_STREAM)
+                string_to_record ("Command line", filename, &len);
+            else
+                res = INVALIDSTREAMID_ERR;
+        };
+        write_record (len, filename);
+        write_integer (res);
+    };
+}
+void stream_connect ()
+{
+    int stream_id;
+
+    if (read_integer (&stream_id))
+    {
+        int device_connected = -1;
+        int res = F_OK;
+
+        if (valid_stream(stream_id))
+        {
+            struct STREAM_DESC *streamp = &filers[stream_id];
+#ifdef RISCOS
+            if (strcmp ("stdin", streamp->name) == 0)
+                device_connected = KEYBOARD_USE;
+            else if ((strcmp ("stdout", streamp->name) == 0) ||
+                     (strcmp ("stderr", streamp->name) == 0))
+                device_connected = SCREEN_USE;
+            else if (streamp->lifetime_m == TEMPORARY)
+                device_connected = TEMP_USE;
+            else
+                device_connected = FILE_USE;
+#else
+            struct stat buffer;
+
+            if (fstat(fileno(streamp->fileptr), &buffer) == 0)
+            {
+                if (buffer.st_mode & S_IFCHR)
+                {
+                    /* We are connected to a device */
+                    if (strcmp ("stdin", streamp->name) == 0)
+                        device_connected = KEYBOARD_USE;
+                    else
+                    {
+                        if ((strcmp ("stdout", streamp->name) == 0) ||
+                            (strcmp ("stderr", streamp->name) == 0))
+                            device_connected = SCREEN_USE;
+                        else
+                            res = OPERATIONFAILED_ERR;
+                    };
+                }
+                else
+                {
+                    if (buffer.st_mode & S_IFREG)
+                    {
+                        /* We are connected to a file */
+                        if (streamp->lifetime_m == TEMPORARY)
+                            device_connected = TEMP_USE;
+                        else
+                            device_connected = FILE_USE;
+                    }
+                    else
+                        res = OPERATIONFAILED_ERR;
+                };
+            }
+            else
+                res = OPERATIONFAILED_ERR;
+#endif
+        }
+        else
+        {
+            if (stream_id == PARAM_STREAM)
+                device_connected = PARAMETER_USE;
+            else
+                res = INVALIDSTREAMID_ERR;
+        };
+        write_integer (device_connected);
+        write_integer (res);
+    };
+}
+void stream_access ()
+{
+    int stream_id;
+
+    if (read_integer (&stream_id))
+    {
+        int access_method = 0;
+        int res = F_OK;
+
+        if (valid_stream(stream_id))
+        {
+            struct STREAM_DESC *streamp = &filers[stream_id];
+            access_method = streamp->access_m;
+        }
+        else
+        {
+            if (stream_id == PARAM_STREAM)
+                access_method = TEXTBYTESTREAM_ACCESS;
+            else
+                res = INVALIDSTREAMID_ERR;
+        };
+        write_integer (access_method);
+        write_integer (res);
+    };
+}
+void stream_length ()
+{
+    int stream_id;
+
+    if (read_integer (&stream_id))
+    {
+        int res = F_OK;
+        long int len = 0L;
+
+        if (valid_stream(stream_id))
+        {
+            struct STREAM_DESC *streamp = &filers[stream_id];
+            res = seek_file_length(streamp->fileptr, &len);
+        }
+        else
+        {
+            if (stream_id == PARAM_STREAM)
+                len = (long) tcominptr;
+            else
+                res = INVALIDSTREAMID_ERR;
+        };
+        write_long_integer (len);
+        write_integer (res);
+    };
+}
+void stream_status ()
+{
+    int stream_id;
+
+    if (read_integer (&stream_id))
+    {
+        int res = F_OK;
+
+        if (valid_stream(stream_id))
+        {
+            struct STREAM_DESC *streamp = &filers[stream_id];
+            res = streamp->result;
+        }
+        else
+        {
+            if (stream_id == PARAM_STREAM)
+            {
+                if (tcominptr == tcomoutptr)
+                    res = F_EOF;
+                else
+                    res = F_OK;
+            }
+            else
+                res = INVALIDSTREAMID_ERR;
+        };
+        write_integer (res);
+    };
+}
+void set_result ()
+{
+    if (read_integer(&transputer_result))
+        write_integer (F_OK);
+}
+void run_command ()
+{
+    int record_len = 0, res = F_OK;
+    char buffer [RECORD_LENGTH + 1];
+
+    if (read_record (&record_len, buffer))
+    {
+        buffer [record_len] = '\0';
+        res = system (buffer);                    /* If ok, returns 0 */
+        if (res != 0)                             /* Not ok, returns -1 */
+            write_integer (OPERATIONFAILED_ERR);
+        else
+            write_integer (F_OK);
+    };
+}
+void rename_file ()
+{
+    int res = F_OK;
+    int old_len = 0;
+    int new_len = 0;
+    char old_name [RECORD_LENGTH + 1], new_name [RECORD_LENGTH + 1];
+
+    if (read_record (&old_len, old_name))
+    if (read_record (&new_len, new_name))
+    {
+        old_name [old_len] = '\0';
+        new_name [new_len] = '\0';
+#ifdef RISCOS
+        TranslateFilename((BYTE *)old_name, FALSE);
+        TranslateFilename((BYTE *)new_name, TRUE);
+#endif
+        res = rename (new_name, old_name);       /* If ok, returns 0 */
+        if (res != 0)                            /* Not ok, returns non-zero */
+            write_integer (OPERATIONFAILED_ERR);
+        else
+            write_integer (F_OK);
+    };
+}
+
+/* Rev 007 begin */
+void enquire_file()
+{
+   char fname[RECORD_LENGTH+1];
+   int res, len=0;
+   FILE *fp;
+#define DONT_KNOW_ACCESS 0
+
+   if (read_record(&len, fname)) 
+      fname[len] = '\0';               /* file name as a string */
+
+#ifdef RISCOS
+   TranslateFilename((BYTE *)fname, FALSE);
+#endif
+   fp = fopen(fname, "r");
+
+   if (fp == NULL)   /* treat "couldn't open" as "doesn't exist" */
+         res = NOSUCHFILE_ERR;
+   else {
+         res = F_OK;
+         fclose(fp);
+   }
+   write_integer(DONT_KNOW_ACCESS);
+   write_integer(res);
+}
+/* Rev 007 end */
+
+
+/* Rev 003 */
+
+void check_file_exists()
+{
+   char fname[RECORD_LENGTH+1];
+   int len=0, res;
+   FILE *fp;
+
+   if (read_record(&len, fname)) {
+      fname[len] = '\0';
+#ifdef RISCOS
+      TranslateFilename((BYTE *)fname, FALSE);
+#endif
+      fp = fopen(fname, "r");
+
+      if (fp == NULL)   /* treat "couldn't open" as "doesn't exist" */
+         res = OPERATIONFAILED_ERR;
+      else {
+         res = F_OK;
+         fclose(fp);
+      }
+      write_integer(res);
+   }
+}
+
+/* end of Rev 003 */
+
+void read_time ()
+{
+    time_t seconds;
+
+    (void) time(&seconds);
+    write_long_integer ((long int)seconds);
+    write_integer (F_OK);
+}
+void read_key ()
+{
+    int key = 0, key_hit;
+#ifdef RISCOS
+    key = PollKey();
+    key_hit = (key >= 0);
+#else
+    key_hit = kbhit();               /* character in keyboard buffer ? */
+    if (key_hit != 0)                /* returns non-zero if key pressed */
+        key = getch();               /* get key and echo it */
+#endif
+    write_integer (key);
+    if (key_hit != 0)
+        write_integer (F_OK);
+    else
+        write_integer (OPERATIONFAILED_ERR);
+}
+void run_time_data ()
+{
+    int option;
+
+    if (read_integer(&option))
+    {
+        switch (option)
+        {
+            case 0:
+                write_integer (alien_option_flag);
+                write_integer (F_OK);
+                break;
+            default:
+                write_integer (0);
+                write_integer (OPERATIONFAILED_ERR);
+                break;
+        }
+    }
+}
+void read_enviroment ()
+{
+    int block_size;
+    char buffer [RECORD_LENGTH + 1];
+
+    if (read_record (&block_size, buffer))
+    {
+        char *ptr;
+        extern char *getenv();
+
+        buffer[block_size] = '\0';
+        ptr = getenv (buffer);
+        if (ptr == NULL)
+        {
+            write_record (0, "");
+            write_integer (OPERATIONFAILED_ERR);
+        }
+        else
+        {
+            int record_len = 0;
+            char record[RECORD_LENGTH];
+
+            string_to_record(ptr, record, &record_len);
+            write_record (record_len, record);
+            write_integer (F_OK);
+        }
+    }
+}
+void recieve_block ()
+{
+    long int source, block_size;
+
+    if (read_long_integer (&source))
+    if (read_long_integer (&block_size))
+    {
+#ifdef RISCOS
+        write_long_record(0L, "");
+        write_integer(OPERATIONFAILED_ERR);
+#else
+        write_long_record(block_size, (char far *) source);
+        write_integer(F_OK);
+#endif
+    }
+}
+void send_block ()
+{
+    long int destination, block_size;
+
+    if (read_long_integer (&destination))
+#ifdef RISCOS
+    {
+        int t = tag_from_link();
+        if (t == RECORD32_VALUE)
+        {
+            long int i;
+            block_size = long_word_from_link();
+            for (i = 0; i < block_size; i++)
+                (void)byte_from_link();
+#ifdef REV_A_FIX
+            if (block_size == 1)
+                (void)byte_from_link();
+#endif
+        }
+        else if (t == NILRECORD_VALUE)
+            block_size = 0L;
+        else
+            terminate_server(T_BAD_RECORD);
+        write_long_integer(0L);
+        write_integer(OPERATIONFAILED_ERR);
+    }
+#else
+    if (read_long_record (&block_size, (char far *) destination))
+    {
+        write_long_integer(block_size);
+        write_integer(F_OK);
+    }
+#endif
+}
+#define NO_PROCESS_REGS 10
+void call_interrupt ()
+{
+#ifdef RISCOS
+    int interrupt, block_size;
+    char buffer[RECORD_LENGTH];
+
+    if (read_integer(&interrupt))
+    if (read_record(&block_size, buffer))
+    {
+        write_integer(0);
+        write_record(0, "");
+        write_integer(OPERATIONFAILED_ERR);
+    }
+#else
+    unsigned value, i;
+    unsigned reg_vals [NO_PROCESS_REGS];
+    int res, flag, interrupt, block_size;
+    unsigned char buffer [RECORD_LENGTH];
+    struct SREGS _segregs;
+    struct SREGS *segregs = &_segregs;
+
+    union REGS _inregs, _outregs;
+    union REGS *inregs = &_inregs,
+               *outregs = &_outregs;
+
+    if (read_integer(&interrupt))
+    if (read_record (&block_size, buffer))
+    {
+        if ((block_size/4) == NO_PROCESS_REGS)
+        {
+            for (i = 0; i < (NO_PROCESS_REGS*4); i+=4)    /* 4 bytes to a word */
+            {
+                /* host and transputer dependant - ignore m.s. 2 bytes as not used */
+                value = buffer[i + 1];                    /* m.s. byte */
+                value = (value << 8) | buffer[i];         /* l.s. byte */
+                reg_vals[i/4] = value;
+            }
+            inregs->x.ax = reg_vals[0];
+            inregs->x.bx = reg_vals[1];
+            inregs->x.cx = reg_vals[2];
+            inregs->x.dx = reg_vals[3];
+            inregs->x.di = reg_vals[4];
+            inregs->x.si = reg_vals[5];
+            segregs->cs = reg_vals[6];
+            segregs->ds = reg_vals[7];
+            segregs->es = reg_vals[8];
+            segregs->ss = reg_vals[9];
+            int86x(interrupt, inregs, outregs, segregs);
+            reg_vals[0] = outregs->x.ax;
+            reg_vals[1] = outregs->x.bx;
+            reg_vals[2] = outregs->x.cx;
+            reg_vals[3] = outregs->x.dx;
+            reg_vals[4] = outregs->x.di;
+            reg_vals[5] = outregs->x.si;
+            reg_vals[6] = segregs->cs;
+            reg_vals[7] = segregs->ds;
+            reg_vals[8] = segregs->es;
+            reg_vals[9] = segregs->ss;
+            for (i = 0; i < (NO_PROCESS_REGS*4); i+=4)    /* 4 bytes to a word */
+            {
+                value = reg_vals[i/4];
+                /* host and transputer dependant */
+                buffer[i] = value & 0xff;                 /* l.s. byte */
+                buffer[i + 1] = (value >> 8) & 0xff;
+                buffer[i + 2] = 0x0;
+                buffer[i + 3] = 0x0;                      /* m.s. byte */
+            }
+            flag = outregs->x.cflag;
+            res = F_OK;
+        }
+        else
+            res = OPERATIONFAILED_ERR;
+        write_integer(flag);
+        write_record ((NO_PROCESS_REGS*4), buffer);
+        write_integer(res);
+    }
+#endif
+}
+#undef NO_PROCESS_REGS
+#define NO_SEG_REGS 4
+void read_regs ()
+{
+#ifdef RISCOS
+    write_record(0, "");
+    write_integer(OPERATIONFAILED_ERR);
+#else
+    unsigned value, i;
+    unsigned char buffer [RECORD_LENGTH];
+    unsigned reg_vals [NO_SEG_REGS];
+    struct SREGS _segregs;
+    struct SREGS *segregs = &_segregs;
+
+    segread(segregs);                         /* get segment registers */
+    reg_vals[0] = segregs->cs;
+    reg_vals[1] = segregs->ds;
+    reg_vals[2] = segregs->es;
+    reg_vals[3] = segregs->ss;
+    for (i = 0; i < (NO_SEG_REGS*4); i+=4)
+    {
+        value = reg_vals[i/4];
+        /* host and transputer dependant */
+        buffer[i] = value & 0xff;             /* l.s. byte */
+        buffer[i + 1] = (value >> 8) & 0xff;
+        buffer[i + 2] = 0x0;
+        buffer[i + 3] = 0x0;                  /* m.s. byte */
+    }
+    write_record (NO_SEG_REGS*4, buffer);
+    write_integer(F_OK);
+#endif
+}
+#undef NO_SEG_REGS
+void port_read ()
+{
+    int address;
+
+    if (read_integer(&address))
+    {
+#ifdef RISCOS
+        write_integer (0);
+        write_integer (OPERATIONFAILED_ERR);
+#else
+        int value;
+
+        value = inp (address);
+        write_integer (value);
+        write_integer (F_OK);
+#endif
+    }
+}
+void port_write ()
+{
+    int address, value;
+
+    if (read_integer(&address))
+    if (read_integer(&value))
+    {
+#ifdef RISCOS
+        write_integer (OPERATIONFAILED_ERR);
+#else
+        outp (address, value);
+        write_integer (F_OK);
+#endif
+    }
+}
+
+/* Rev 002 */
+
+
+/* User service: Stream Record Length */
+void stream_recordlength ()
+{
+   int res = F_OK, stream_id = INVALID_STREAM;
+   long first = -1L, second = -1L;
+   long int third = 0L;   /* Rev 003 */
+   if (read_integer(&stream_id)) {
+      if (valid_stream (stream_id)) {
+         struct STREAM_DESC *streamp = &filers[stream_id];
+         if (streamp->lifetime_m == SPECIAL)
+            second = SERIALRECL_MAX;
+         else if (streamp->access_m == TEXTSEQUENTIAL_ACCESS ||
+                  streamp->access_m == TEXTBYTESTREAM_ACCESS)
+            second = TEXTSEQRECL_MAX;
+         else if (streamp->access_m == BINARYDIRECT_ACCESS ||
+                    streamp->access_m == TEXTDIRECT_ACCESS)    {
+            first  = streamp->recl;
+            second = streamp->recl;
+            third  = streamp->recl;    /* Rev 003 */
+         } else
+            second = -(BINSEQRECL_MAX);
+      } else
+         res = INVALIDSTREAMID_ERR;
+      write_long_integer (first);
+      write_long_integer (second);
+      write_long_integer (third);      /* Rev 003 */
+      write_integer (res);
+   }      
+}
+
+/* User service: Read Record */
+void record_read ()
+{
+/* int res = F_OK, recspec, maxlen, bytes_read=0;    Rev 003 */
+   int res = F_OK, maxlen, bytes_read=0;          /* Rev 003 */
+   long recspec;                                  /* Rev 003 */
+   long trl=0L;
+   int stream_id = INVALID_STREAM;
+   char buffer [RECORD_LENGTH], *bp=buffer;
+   struct STREAM_DESC *streamp;
+
+   if (read_integer (&stream_id))
+/* if (read_integer (&recspec))                      Rev 003 */
+   if (read_long_integer (&recspec))              /* Rev 003 */
+   if (read_integer (&maxlen))
+   if (valid_stream (stream_id)) {
+      streamp = &filers[stream_id];
+      if (streamp->access_m == BINARYDIRECT_ACCESS || 
+          streamp->access_m == TEXTDIRECT_ACCESS) {
+   
+         /* direct version */
+/*       if (recspec != -1 ) {                       Rev 003 */
+         if (recspec & START_OF_RECORD) {         /* Rev 003 */
+            if ((res=adjust_state(streamp, READING_STATE)) == F_OK)
+               res = file_position (streamp,
+/*                                  (long)((recspec-1)*streamp->recl),    003 */
+/* Rev 003 */                       (long)(((recspec & RECORD_NUM_MASK)-1)
+/* Rev 003 */                                * streamp->recl),
+                                    BOF_POSITION);
+            if (res != F_OK)
+               maxlen = 0;
+            streamp->transferred = 0;
+         }
+         trl = streamp->recl;
+         if ((maxlen+streamp->transferred) > streamp->recl)
+            maxlen = streamp->recl - streamp->transferred;
+/* Rev 004
+         if (maxlen > 0) */
+         if (maxlen >= 0) {  /* Rev 004 */
+            res = file_read (streamp, buffer, maxlen, &bytes_read);
+         }
+      } else if (streamp->access_m == TEXTBYTESTREAM_ACCESS ||
+                 streamp->access_m == TEXTSEQUENTIAL_ACCESS) {
+   
+         /* text version */ 
+/*       if (recspec >= 0) {                             Rev 003 */
+         if (recspec & START_OF_RECORD) {             /* Rev 003 */
+            if ((res=adjust_state(streamp, READING_STATE)) == F_OK) {
+               if (streamp->text_buff == NULL)
+               if ((streamp->text_buff=malloc(TEXTSEQRECL_MAX+2)) == NULL)
+                  terminate_server (T_OUT_OF_MEMORY);
+               res = file_reads (streamp, streamp->text_buff,
+                                 TEXTSEQRECL_MAX, &bytes_read);
+            }
+            streamp->recl = bytes_read;
+            streamp->transferred = 0;
+            trl = streamp->recl;
+         }
+         if ((maxlen+streamp->transferred) > streamp->recl)
+            maxlen = streamp->recl - streamp->transferred;
+         bp = &streamp->text_buff[streamp->transferred];
+         bytes_read = maxlen;
+   
+      } else if (streamp->access_m == BINARYSEQUENTIAL_ACCESS) {
+         
+         /* bin-seq version */
+/*       if (recspec >= 0) {                          Rev 003 */
+         if (recspec & START_OF_RECORD) {          /* Rev 003 */
+            if ((res=adjust_state(streamp, READING_STATE)) == F_OK)
+               res = file_read (streamp, &trl, 4, &bytes_read);
+            if (res != F_OK)
+               maxlen = 0;
+            else if (trl == -1L) {
+               res = file_position (streamp, -4L, REL_POSITION);
+               maxlen = 0;
+               res = F_EOF;
+            }
+            streamp->transferred = 0;
+            streamp->recl = trl;
+         }
+         if ((maxlen+streamp->transferred) > streamp->recl)
+            maxlen = streamp->recl - streamp->transferred;
+/* Rev 004 if (maxlen > 0) */
+         if (maxlen >= 0)        /* Rev 004 */ 
+            res = file_read (streamp, buffer, maxlen, &bytes_read);
+
+      } else {
+
+         /* binary bytestreams: fudge it */
+/*       if (recspec >= 0) {                       Rev 003 */
+         if (recspec & START_OF_RECORD) {       /* Rev 003 */
+            adjust_state (streamp, READING_STATE);
+            trl = maxlen;
+            streamp->recl = maxlen;
+/* Rev 004  if (maxlen > 0) */
+            if (maxlen >= 0)       /* Rev 004 */
+               res = file_read (streamp, buffer, maxlen, &bytes_read);
+            if (res == F_OK)
+               streamp->transferred = 0;
+         }
+      }
+
+      if (recspec & END_OF_RECORD)                             /* Rev 003 */
+         res = adjust_state(streamp, WAITING_STATE);           /* Rev 003 */
+      
+      write_long_integer (trl);
+      write_record (bytes_read, bp);      
+      write_integer (res);
+      streamp->transferred += bytes_read;
+   }   
+}
+
+/* User service: Write Record */
+void record_write ()
+{
+/* int res = F_OK, recspec, reclen;                            Rev 003 */
+   int res = F_OK, reclen;                                  /* Rev 003 */
+   long recspec;                                            /* Rev 003 */
+   long trl;
+   int bytes_written = 0;
+   int stream_id = INVALID_STREAM;
+   char buffer [RECORD_LENGTH];
+   struct STREAM_DESC *streamp;
+
+   if (read_integer (&stream_id))
+/* if (read_integer (&recspec))                                Rev 003 */
+   if (read_long_integer (&recspec))                        /* Rev 003 */
+   if (read_long_integer (&trl))
+   if (read_record (&reclen, buffer))
+   if (valid_stream (stream_id)) {
+      streamp = &filers[stream_id];
+      if (streamp->access_m == BINARYDIRECT_ACCESS || 
+          streamp->access_m == TEXTDIRECT_ACCESS) {
+   
+         /* direct version */
+/*       if (recspec != -1 ) {                                 Rev 003 */
+         if (recspec & START_OF_RECORD) {                   /* Rev 003 */
+            if ((res=adjust_state(streamp, WRITING_STATE)) == F_OK)
+               res = file_position (streamp,
+/*                                  (long)((recspec-1)*streamp->recl),   003 */
+/* Rev 003 */                       (long)(((recspec & RECORD_NUM_MASK)-1)
+/* Rev 003 */                                * streamp->recl),
+                                    BOF_POSITION);
+            if (res != F_OK)
+               reclen = 0;
+         }
+         if (reclen > 0)
+            res = file_write (streamp, buffer, reclen);
+   
+      } else if (streamp->access_m == TEXTBYTESTREAM_ACCESS ||
+                 streamp->access_m == TEXTSEQUENTIAL_ACCESS) {
+         /* text version */ 
+/*       if (recspec >= 0) {                                   Rev 003 */
+         if (recspec & START_OF_RECORD) {                   /* Rev 003 */
+         if ((res=adjust_state(streamp, WRITING_STATE)) != F_OK) {
+               reclen = 0;
+            }
+            else {
+               streamp->transferred = 0;
+            }
+/*       } else if (recspec == -2)                             Rev 003 */
+         }
+         if (recspec & RECORD_SUPPRESS_NL)           /* Rev 003 */
+            streamp->suppress_nl = TRUE;  
+         if (reclen > 0) {                         /*Note: what about = ?? */
+              res = file_write (streamp, buffer, reclen);
+              if (res == F_OK)
+               streamp->transferred += reclen;
+         }
+   
+      } else if (streamp->access_m == BINARYSEQUENTIAL_ACCESS) {
+
+         /* bin-seq version */
+/*       if (recspec >= 0) {                                   Rev 003 */
+         if (recspec & START_OF_RECORD) {                   /* Rev 003 */
+            res=adjust_state(streamp, WRITING_STATE);
+            streamp->recl = trl;
+            res = file_write (streamp, &trl, 4);
+            streamp->transferred = 0;
+            if (res != F_OK)
+               reclen = 0;
+         }
+         if (reclen > 0) {
+            res = file_write (streamp, buffer, reclen);
+            if (res == F_OK)
+               streamp->transferred += reclen;
+         }
+         
+      } else {
+
+         /* bin-bytestream version */
+/*       if (recspec >= 0) {                                      Rev 003 */
+         if (recspec & START_OF_RECORD) {                      /* Rev 003 */
+            res=adjust_state(streamp, WRITING_STATE);
+            streamp->recl = trl;
+            streamp->transferred = 0;
+            if (res != F_OK)
+               reclen = 0;
+         }
+         if (reclen > 0) {
+            res = file_write (streamp, buffer, reclen);
+            if (res == F_OK)
+               streamp->transferred += reclen;
+         }
+      }
+
+      if (recspec & END_OF_RECORD)                             /* Rev 003 */
+         res = adjust_state(streamp, WAITING_STATE);           /* Rev 003 */
+
+      write_integer (res);
+   }   
+}
+
+/* User service: Backspace */
+void record_backspace ()
+{
+   int res;
+   struct STREAM_DESC *streamp;
+   int stream_id = INVALID_STREAM;
+   if (read_integer (&stream_id))
+   if (valid_stream (stream_id)) {
+      streamp = &filers[stream_id];
+      if ((res=adjust_state(streamp, WAITING_STATE)) == F_OK)
+         res = file_backspace (streamp);
+   }
+   write_integer (res);
+}
+
+/* User service: Rewind */
+void record_rewind ()
+{
+   int res = INVALIDSTREAMID_ERR;
+   struct STREAM_DESC *streamp = NULL;
+   int stream_id = INVALID_STREAM;
+
+   if (read_integer (&stream_id))
+   if (valid_stream (stream_id)) {
+      streamp = &filers[stream_id];
+      if ((res=adjust_state(streamp, WAITING_STATE)) == F_OK)
+         res = file_position (streamp, 0L, BOF_POSITION);
+      streamp->transferred = -1;
+   }
+   write_integer (res);
+}
+
+/* User service: Truncate */
+/* NB: this doesn't do anything much with binary bytestreams */
+void record_truncate ()
+{
+   int res;
+   struct STREAM_DESC *streamp;
+   int stream_id = INVALID_STREAM;
+
+   if (read_integer (&stream_id))
+   if (valid_stream (stream_id)) {
+      streamp = &filers[stream_id];
+      if ((res=adjust_state(streamp, WAITING_STATE)) == F_OK)
+/*       res == terminate_file (streamp, TRUE);                Rev 003 */
+         res = terminate_file (streamp, TRUE);              /* Rev 003 */
+   }
+   write_integer (res);
+}
+
+/* end of Rev 002 */
+
+void add_to_tcom (str)
+    char *str;
+{
+    char c;
+    while ((c = *str++) != '\0')
+        tcom[tcominptr++] = c;
+    tcom[tcominptr++] = ' ';
+}
+int tcomread (buffer, len)
+    int len;
+    char *buffer;
+{
+    int bytes_read = 0;
+
+    while ( (tcomoutptr < tcominptr) && (bytes_read < len) )
+    {
+        *buffer++ = tcom[tcomoutptr++];
+        bytes_read++;
+    };
+    return (bytes_read);
+}
+int read_number (str)
+    char *str;
+{
+    int result = 0;
+    int base;
+    int carry_on;
+    int c;
+
+    if (*str == '#')
+    {
+        base = 16; str++;
+    } else
+        base = 10;
+    carry_on = TRUE;
+    while (carry_on)
+    {
+       c = *str++;
+       if ((c >= '0') && (c <= '9'))
+           result = (result * base) + c - '0';
+       else
+       {
+           if (base == 16)
+           {
+               if ((c >= 'a') && (c <= 'f'))
+                   result = (result * base) + 10 + c - 'a';
+               else
+               {
+                   if ((c >= 'A') && (c <= 'F'))
+                       result = (result * base) + 10 + c - 'A';
+                   else
+                       carry_on = FALSE;
+               };
+           }
+           else
+               carry_on = FALSE;
+       };
+    };
+    return (result);
+}
+#ifndef RISCOS
+int parse_command (argc, argv, boot_file_name)
+    int argc;
+    char *argv[], *boot_file_name;
+/* Parse the command line typed in by the user. */
+{
+    char *ch;
+    int i = 1;
+
+    strcpy (boot_file_name, DEFAULT_BOOT_FILE);
+    while (i < argc)
+    {
+        ch = argv[i++];
+        switch (*ch++)
+        {
+            case '-':
+            case '/':
+                switch (*ch++)
+                {
+                    case ':' :
+                        switch (*ch++)
+                        {
+                            case 'b':
+                                if (i < argc)
+                                {
+                                    boot_file_exists = TRUE;
+                                    strcpy (boot_file_name, argv[i++]);
+                                }
+                                else
+                                {
+                                    printf ("Missing boot file name parameter\n");
+                                    return (FALSE);
+                                };
+                                break;
+                            case 'l':
+                                if (i < argc)
+                                {
+                                    link_base = read_number (argv[i++]);
+                                }
+                                else
+                                {
+                                    printf ("Missing link address parameter\n");
+                                    return (FALSE);
+                                };
+                                break;
+                            case 'i':
+                                printf (version);
+                                printf (copyright);
+                                break;
+                            case 'e':
+                                test_error_flag = TRUE;
+                                break;
+                            case 'o':
+                                if (i < argc)
+                                {
+                                    alien_option_flag = read_number (argv[i++]);
+                                }
+                                else
+                                {
+                                    printf ("Missing alien option parameter\n");
+                                    return (FALSE);
+                                };
+                                break;
+                            default:
+                                add_to_tcom ( argv[i-1] );
+                                break;
+                        };
+                        break;
+                    default :
+                        add_to_tcom ( argv[i-1] );
+                        break;
+                };
+                break;
+            default:
+                add_to_tcom ( argv[i-1] );
+                break;
+        };
+    };
+    return (TRUE);
+}
+#endif
+void read_link ()
+/* Read a message coming down the link. */
+{
+    if (read_integer (&command))
+    {
+#ifdef DCOMM
+printf("Command:%d\n",command);
+#endif
+        switch (command)
+        {
+            case TERMINATE_CMD:
+                filer_close ();
+                write_integer (F_OK);
+                terminate_server (T_TERMINATED);
+                break;
+            case ALIENTERMINATE_CMD:
+                write_integer (F_OK);
+                break;
+            case OPENFILE_CMD:
+                open_file (PERMANENT);
+                break;
+            case OPENTEMP_CMD:
+                open_temp ();
+                break;
+            case OPENINPUTSTREAM_CMD:
+                open_stream (S_INPUT);
+                break;
+            case OPENOUTPUTSTREAM_CMD:
+                open_stream (S_OUTPUT);
+                break;
+            case STREAMACCESS_CMD:
+                stream_access ();
+                break;
+            case STREAMSTATUS_CMD:
+                stream_status ();
+                break;
+            case STREAMFILE_CMD:
+                stream_file ();
+                break;
+            case STREAMLENGTH_CMD:
+                stream_length ();
+                break;
+            case STREAMCONNECT_CMD:
+                stream_connect ();
+                break;
+            case CLOSESTREAM_CMD:
+                close_stream ();
+                break;
+            case READBLOCK_CMD:
+                read_block ();
+                break;
+            case WRITEBLOCK_CMD:
+                write_block ();
+                break;
+            case SEEK_CMD:
+                stream_seek ();
+                break;
+            case SETRESULT_CMD:
+                set_result ();
+                break;
+            case RUNCOMMAND_CMD:
+                run_command ();
+                break;
+            case RENAMEFILE_CMD:
+                rename_file ();
+                break;
+            case READTIME_CMD:
+                read_time ();
+                break;
+            case READKEY_CMD:
+                read_key ();
+                break;
+            case RUNTIMEDATA_CMD :
+                run_time_data ();
+                break;
+            case READENVIROMENT_CMD :
+                read_enviroment ();
+                break;
+            case RECIEVEBLOCK_CMD :
+                recieve_block ();
+                break;
+            case SENDBLOCK_CMD :
+                send_block ();
+                break;
+            case CALLINTERRUPT_CMD :
+                call_interrupt ();
+                break;
+            case READREGS_CMD :
+                read_regs ();
+                break;
+            case PORTREAD_CMD :
+                port_read ();
+                break;
+            case PORTWRITE_CMD :
+                port_write ();
+                break;
+/* Rev 002 */
+            case STREAMRECORDLENGTH_CMD:
+                stream_recordlength ();
+                break;
+            case READRECORD_CMD:
+                record_read ();
+                break;
+            case WRITERECORD_CMD:
+                record_write ();
+                break;
+            case BACKSPACE_CMD:
+                record_backspace ();
+                break;
+            case REWIND_CMD:
+                record_rewind ();
+                break;
+            case TRUNCATE_CMD:
+                record_truncate ();
+                break;
+/* end of Rev 002 */
+/* Rev 003 */
+            case CHECKFILEEXISTS_CMD:
+                check_file_exists ();
+                break;
+/* end of Rev 003 */
+/* Rev 007 begin */
+            case ENQUIREFILE_CMD:
+               enquire_file();
+               break;
+/* Rev 007 end */
+            default:
+                terminate_server (T_ILLEGAL_COMMAND);
+        }
+    };
+}
+void root_error ()
+/* Process an error in the transputer system. */
+{
+    terminate_server (T_TRANSPUTER_ERR);
+}
+void terminate_message (t_code)
+    int t_code;
+/* Report the server's reason for termination. */
+{
+    switch (t_code)
+    {
+        case T_TERMINATED:
+            break;
+        case T_USR_STOP:
+        case T_USR_BRK:
+            fprintf (stderr, "Server aborted by user\n");
+            break;
+        case T_TRANSPUTER_ERR:
+            fprintf (stderr, "Server terminated: error in transputer system\n");
+            break;
+        case T_BAD_BOOT:
+            fprintf (stderr, "Server terminated: cannot boot root transputer\n");
+            break;
+        case T_ILLEGAL_COMMAND:
+            fprintf (stderr,"Server terminated: illegal filer command received\n");
+            break;
+        case T_BAD_COMMAND_LINE:
+            fprintf (stderr, "Server terminated: bad command line\n");
+            break;
+        case T_BAD_RECORD:
+            fprintf (stderr, "Server terminated: bad protocol when expecting record\n");
+            break;
+        case T_BAD_INT32:
+            fprintf (stderr, "Server terminated: bad protocol when expecting INT32\n");
+            break;
+/* Rev 002 */            
+        case T_OUT_OF_MEMORY:
+            fprintf (stderr, "Server terminated: not enough memory\n");
+            break;
+/* end of Rev 002 */
+    }
+}
+#ifndef RISCOS
+int root_init( boot_file_name, analyse_flag )
+    char boot_file_name[];
+    int analyse_flag;
+/* Initialise the root transputer board by resetting it and sending the boot
+   file to it. */
+{
+    init_root();
+    if (boot_file_exists)
+    {
+        /*Rev 001*/
+        /* removed the following:
+        ** fprintf (stdout, "Booting root transputer ...\n");
+        */
+        if (analyse_flag)
+            reset_analyse_root();
+        else
+            reset_root();
+        return (boot_root (boot_file_name));
+    }
+    return(F_OK);
+}
+#endif
+void filer_init ()
+{
+    int i;
+    for (i = 0; i < N_STREAMS; i++)
+        filers[i].inuse = FALSE;
+}
+#ifndef RISCOS
+int usr_brk_handler (sig)
+    int sig;
+/* Process a user break ( control-break on the keyboard ). */
+{
+    terminate_server(T_USR_BRK);
+}
+main (argc, argv, envp)
+    int argc;
+    char *argv[], *envp[];
+{
+    int init_flag;                   /* Boot transputer flag */
+    int analyse_flag = FALSE;        /* Boot transputer in analyse mode flag */
+    char boot_file_name[FILE_NAME_LENGTH];
+
+    if (!parse_command(argc, argv, boot_file_name))   /* Parse command line */
+    {
+        terminate_code = T_BAD_COMMAND_LINE;
+        init_flag = FALSE;
+    }
+    else
+        init_flag = TRUE;
+    while (init_flag)
+    {
+        running = TRUE;
+        init_flag = FALSE;
+        terminate_code = 0;
+
+        filer_init();
+        if (root_init (boot_file_name, analyse_flag) == F_OK)
+        {
+            signal (SIGINT, usr_brk_handler);
+            server_main ();
+            switch (terminate_code)
+            {
+                case T_TRANSPUTER_ERR:
+                    fprintf (stderr, "Error in transputer system\n");
+                case T_USR_BRK:
+                    filer_close();
+                    analyse_flag = TRUE;
+                    break;
+                default:
+                    break;
+            };
+        }
+        else
+            terminate_code = T_BAD_BOOT;
+    };
+    terminate_message (terminate_code);
+    exit(transputer_result);
+}
+#else
+static void afserver_command_line()
+{
+    extern BYTE DoctoredCommandLine[];
+    char *p = (char *)DoctoredCommandLine;
+
+    tcominptr = 0;
+    tcomoutptr = 0;
+    while (*p != '\0' && tcominptr < COMMAND_LINE_LENGTH - 1)
+    {
+        while (*p == ' ')
+            ++p;
+        if ((p[0] == '-' || p[0] == '/') && p[1] == ':' &&
+            (p[2] == 'o' || p[2] == 'O'))
+        {
+            p += 3;
+            while (*p == ' ')
+                ++p;
+            alien_option_flag = read_number(p);
+            while (*p != '\0' && *p != ' ')
+                ++p;
+        }
+        else
+        {
+            while (*p != '\0' && *p != ' ' && tcominptr < COMMAND_LINE_LENGTH - 1)
+                tcom[tcominptr++] = *p++;
+            if (tcominptr < COMMAND_LINE_LENGTH - 1)
+                tcom[tcominptr++] = ' ';
+        }
+    }
+    if (tcominptr != 0 && tcom[tcominptr - 1] != ' ' &&
+        tcominptr < COMMAND_LINE_LENGTH - 1)
+        tcom[tcominptr++] = ' ';
+}
+
+int AFServe()
+{
+    if (WindowSwitch)
+        StartWindow();
+
+    running = TRUE;
+    terminate_code = 0;
+    transputer_result = 0;
+    filer_init();
+    afserver_command_line();
+
+    while (running)
+    {
+        if (TestErrorSwitch)
+            if (TestError(TheLink) == 1)
+                terminate_server(T_TRANSPUTER_ERR);
+        if (running)
+            read_link();
+    }
+
+    filer_close();
+    if (terminate_code != T_TERMINATED)
+        terminate_message(terminate_code);
+    if (ThrowbackSwitch)
+        Throwback_Exit();
+    if (WindowSwitch)
+        EndWindow();
+    return transputer_result;
+}
+#endif

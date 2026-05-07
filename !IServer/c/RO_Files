@@ -211,6 +211,56 @@ PRIVATE int CheckError(void * ptr)
   return i;
 }
 
+PRIVATE VOID TryThrowback(char *Ptr)
+{
+  int Severity = CheckError(Ptr);
+  if (Severity != -1) /* Error line detected */
+  {
+    int  NChars;
+    char NextChar;
+    int  LineNo        = 0;
+    char FileName[160] = "";
+    char Message[160]  = "";
+
+    if ( (sscanf(Ptr, "  %*[^-\n]   -  %*[^-\n]   - %[^-(\n]      %c         %n",
+                      /* Severity */ /* Program */  FileName , &NextChar , &NChars) == 2)
+      && ( ((NextChar == '(') &&
+            (sscanf(Ptr+NChars, " %u   )-  %[^\n]",
+                                &LineNo , Message) == 2))
+        || ((NextChar == '-') &&
+            (sscanf(Ptr+NChars, "%[^\n]", Message) == 1)) ) )
+    {
+      TranslateFilename((BYTE *)FileName, FALSE);
+      Throwback(Severity, FileName, LineNo, Message);
+    }
+  }
+}
+
+PRIVATE VOID ThrowbackBytes(char *Ptr, int Count)
+{
+  static char Line[256];
+  static int  Used = 0;
+
+  while (Count-- > 0)
+  {
+    char c = *Ptr++;
+    if (Used == sizeof(Line)-1)
+    {
+      Line[Used] = 0;
+      TryThrowback(Line);
+      Used = 0;
+    }
+    if (c == '\n' || c == '\r')
+    {
+      Line[Used] = 0;
+      TryThrowback(Line);
+      Used = 0;
+    }
+    else
+      Line[Used++] = c;
+  }
+}
+
 PUBLIC int wfwrite(void * ptr, size_t size, size_t nmemb, FILE* fd)
 {
   CHECK_FD;
@@ -229,30 +279,7 @@ PUBLIC int wfwrite(void * ptr, size_t size, size_t nmemb, FILE* fd)
   /**************************************************************************/
 
   if (ThrowbackSwitch && f == &se)
-  {
-    int Severity = CheckError(ptr);
-    if (Severity != -1) /* Error line detected */
-    {
-      int  NChars;
-      char NextChar;
-      int  LineNo        = 0;
-      char FileName[160] = "";
-      char Message[160]  = "";
-      char *Ptr          = (char*)ptr;
-
-      if ( (sscanf(Ptr, "  %*[^-\n]   -  %*[^-\n]   - %[^-(\n]      %c         %n",
-                        /* Severity */ /* Program */  FileName , &NextChar , &NChars) == 2)
-        && ( ((NextChar == '(') &&
-              (sscanf(Ptr+NChars, " %u   )-  %[^\n]",
-                                  &LineNo , Message) == 2))
-          || ((NextChar == '-') &&
-              (sscanf(Ptr+NChars, "%[^\n]", Message) == 1)) ) )
-      {
-        TranslateFilename((BYTE *)FileName, FALSE);
-        Throwback(Severity, FileName, LineNo, Message);
-      }
-    }    
-  }
+    ThrowbackBytes((char*)ptr, nmemb*size);
 
   if (WindowActive && f != FNULL)
   {

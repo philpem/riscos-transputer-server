@@ -11,10 +11,10 @@ Squeezeflags = -o $@
 
 
 # Final targets:
-@.!RunImage:   @.o.FileC @.o.HostC @.o.IServer @.o.RO_Debug @.o.RO_Files \
+@.!RunImage:   @.o.AFServer @.o.FileC @.o.HostC @.o.IServer @.o.RO_Debug @.o.RO_Files \
         @.o.RO_Keybrd @.o.RO_Link @.o.RO_Screen @.o.RO_Window @.o.ServerC @.o.TMBLink @.o.RO_TBack \
         C:o.Stubs RISC_OSLib:RISC_OSLib 
-        Link $(Linkflags) @.o.FileC @.o.HostC @.o.IServer @.o.RO_Debug \
+        Link $(Linkflags) @.o.AFServer @.o.FileC @.o.HostC @.o.IServer @.o.RO_Debug \
         @.o.RO_Files @.o.RO_Keybrd @.o.RO_Link @.o.RO_Screen @.o.RO_Window @.o.ServerC @.o.TMBLink \
         @.o.RO_TBack C:o.Stubs RISC_OSLib:RISC_OSLib 
 
@@ -23,6 +23,8 @@ Squeezeflags = -o $@
 
 
 # Static dependencies:
+@.o.AFServer:   @.c.AFServer
+        cc $(ccflags) -o @.o.AFServer @.c.AFServer 
 @.o.FileC:   @.c.FileC
         cc $(ccflags) -o @.o.FileC @.c.FileC 
 @.o.HostC:   @.c.HostC
@@ -50,13 +52,6 @@ Squeezeflags = -o $@
 
 
 # Dynamic dependencies:
-o.FileC:	c.FileC
-o.FileC:	h.inmos
-o.FileC:	h.iserver
-o.FileC:	h.pack
-o.FileC:	RISC_OSLib:h.os
-o.FileC:	C:h.swis
-o.FileC:	C:h.kernel
 o.FileC:	c.FileC
 o.FileC:	h.inmos
 o.FileC:	h.iserver
@@ -143,5 +138,9 @@ o.TMBLink: s.TMBLink
 o.TMBLink: OSLibInclude:Hdr.Types
 o.TMBLink: OSLibInclude:Hdr.OS
 o.TMBLink: OSLibInclude:Hdr.Podule
+o.AFServer:	c.AFServer
+o.AFServer:	h.inmos
+o.AFServer:	h.iserver
+o.AFServer:	h.afserver
 o.RO_TBack:	c.RO_TBack
 o.RO_TBack:	RISC_OSLib:h.os
