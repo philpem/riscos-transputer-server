@@ -311,10 +311,16 @@ PRIVATE VOID Core()
  *   PrintHelp
  */
 
+EXTERN char *afserver_version(void);
+EXTERN char *afserver_copyright(void);
+
 PRIVATE VOID PrintHelp ()
 {
    fprintf( stdout, "\n%s : occam 2 toolset host file server\n", PROGRAM_NAME);
    fprintf( stdout, "%s&%s version %s.\n", HOST, HardwareNames[BOARD_ID], VERSION_NAME );
+   fprintf( stdout, "%s", afserver_version() );
+   fprintf( stdout, "   %s", afserver_copyright() );
+   fprintf( stdout, "AFServer integration by Phil Pemberton <philpem@philpem.me.uk>\n" );
    fprintf( stdout, "%s\n", Copyright );
    fprintf( stdout, "Usage:  %s {%coption}\n\n", PROGRAM_NAME, SWITCH_CHAR );
    fprintf( stdout, "Options: \n" );

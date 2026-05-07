@@ -159,6 +159,15 @@ int running;                   /* Server is running flag */
 
 int test_error_flag = FALSE;   /* If true, test error flag */
 
+char *afserver_version()
+{
+    return version;
+}
+char *afserver_copyright()
+{
+    return copyright;
+}
+
 #ifdef RISCOS
 static int af_read_bytes(buffer, length)
     char *buffer;
