@@ -1,0 +1,85 @@
+/* --
+   -- Debug support for Desktop IServer
+   --
+   -- RO_Debug.c
+   --
+   -- Richard Crook
+   -- February 1992
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+#include "inmos.h"
+#include "iserver.h"
+
+#include "werr.h"
+
+PRIVATE char Debug_Buffer[128];
+
+EXTERN BOOL WindowActive;
+
+EXTERN LINK TheLink;
+EXTERN int  CloseLink(int);
+
+/* Generate debug output ================================================================================ */
+
+PUBLIC VOID w_debug(const char * format, ...)
+{
+  va_list ap;
+  va_start(ap, format);
+  (void)vsprintf(Debug_Buffer, format, ap);
+  va_end(ap);
+  if (WindowActive) werr(FALSE, Debug_Buffer);
+  else
+  {
+    printf("(%s)", Debug_Buffer);
+    fflush(stdout);
+  }
+}
+
+/* Generate program information ========================================================================= */
+
+PUBLIC VOID w_info(const char * format, ...)
+{
+  va_list ap;
+  va_start(ap, format);
+  (void)vsprintf(Debug_Buffer, format, ap);
+  va_end(ap);
+  if (WindowActive) werr(FALSE, Debug_Buffer);
+  else
+  {
+    printf("%s", Debug_Buffer);
+    fflush(stdout);
+  }
+}
+
+/* Abort program (fatal error) ========================================================================== */
+
+PUBLIC VOID w_abort(FILE * f, const char * format, ...)
+{
+  va_list ap;
+  va_start(ap, format);
+  (void)vsprintf(Debug_Buffer, format, ap);
+  va_end(ap);
+  if (TheLink != -1) (void)CloseLink(TheLink);
+  if (WindowActive)
+  {
+    werr(TRUE, Debug_Buffer);
+  }
+  else
+  {
+    fprintf(f, "\nError - %s - %s.\n", PROGRAM_NAME, Debug_Buffer);
+    exit(BAD_KARMA);
+  }
+}
+
+/* Dummy procedure ====================================================================================== */
+
+PUBLIC VOID _Debug_Dummy_Procedure(void)
+{
+  UNUSED(Copyright[0]);
+}
+
+/* End of file ========================================================================================== */

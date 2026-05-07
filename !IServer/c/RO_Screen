@@ -1,0 +1,588 @@
+/* --
+   -- Screen emulation for Desktop IServer
+   --
+   -- RO_Screen.c
+   --
+   -- Richard Crook
+   -- February 1992
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "inmos.h"
+#include "iserver.h"
+
+#include "os.h"
+#include "wimp.h"
+#include "wimpt.h"
+#include "werr.h"
+#include "swis.h"
+
+#include "DWindow.h"
+
+/*
+ *      ScreenX and ScreenY define the size of the screen
+ *      CharX and CharY give the scaling of characters to screen coordinates
+ *
+ *      NB The settings of CharX and CharY ought to be variable, and derived
+ *         from the XEigFactor and YEigFactor mode variables.
+ */
+
+#define ScreenX 80
+#define ScreenY 25
+
+PRIVATE int CharX = 16;
+PRIVATE int CharY = 32;
+
+/*
+ *      Screen[y][x] is the internal representation of the screen
+ *      ScrCol[y][x] gives the screen colours at that point
+ *      FColour and BColour give the current foreground and background colours
+ *      CursorX and CursorY give the position of the cursor (caret)
+ *
+ *      Note that Screen[y][ScreenX] is valid, and always contains
+ *      zero, so that string print routines can be used.
+ *
+ *      Screen[0][0] is the top left corner of the window.
+ */
+
+PRIVATE BYTE Screen[ScreenY][ScreenX+1];
+PRIVATE int  ScrCol[ScreenY][ScreenX+1];
+PRIVATE BYTE FColour = 0;
+PRIVATE BYTE BColour = 7;
+PRIVATE int  CursorX = 0;
+PRIVATE int  CursorY = 0;
+
+/*
+ *      These variables control the issuance of redraw requests during update
+ *      If a redraw request is issued individually for each (printing) character
+ *      output, the screen is updated far too slowly, so we compact the requests
+ *      into one per line, wherever possible.
+ *
+ *      UpdateX gives the X position, on the current line, at which updating
+ *      of the screen started. If set to -1, we are not in mid-update
+ */
+
+PRIVATE int  UpdateX = -1;
+
+/*
+ *      Window gives the (RISC_OSLib) window handle for the window in use
+ *      WindowOpen is set when the window is open
+ *      WindowActive is set when we are in multi-tasking mode
+ */
+
+EXTERN wimp_w Window;
+EXTERN BOOL   WindowOpen;
+EXTERN BOOL   WindowActive;
+
+/*
+ *      Miscellaneous constants
+ */
+
+#define SPACE  32
+#define DELETE 127
+
+PRIVATE int min(int x, int y) { return x < y ? x : y; }
+
+/* Basic output routines ================================================================================ */
+
+/* Output byte to VDU ----------------------------------------------------------------------------------- */
+
+PRIVATE VOID vdu(BYTE c)
+{
+  wimpt_noerr(os_swi0(0x20100 + c));
+}
+
+/* Clear graphics area ---------------------------------------------------------------------------------- */
+
+PRIVATE VOID clg(void)
+{
+  vdu((BYTE) 16);
+}
+
+/* Move graphics cursor --------------------------------------------------------------------------------- */
+
+PRIVATE VOID gmove(int x, int y)
+{
+  wimpt_noerr(os_swi3(0x20045, 4, x, y));
+}
+
+/* Write string to VDU ---------------------------------------------------------------------------------- */
+
+PRIVATE VOID writes(BYTE * ptr)
+{
+  wimpt_noerr(os_swi1(0x20002, (int)ptr));
+}
+
+/* Screen redraw routines =============================================================================== */
+
+/* Redraw screen region --------------------------------------------------------------------------------- */
+/*
+ * Calculate screen array rectangle including specified rectangle, and
+ * write it to the screen
+ */
+
+PUBLIC VOID RedrawRegion(wimp_redrawstr * r)
+{
+  register int    j;
+  register BYTE * ptr1, * ptr2;
+  register BYTE   c;
+  int             x0, y0, x1, y1, xs, ys;
+
+  /* (xs, ys) give the screen coordinates of WorkArea (0,0) */
+
+  xs = r->box.x0 - r->scx;
+  ys = r->box.y1 - r->scy;
+
+  /* Now calculate the boundary character positions */
+
+/*  werr(FALSE, "Redraw: %d,%d %d,%d",(r->g.x0 - xs),(ys - r->g.y0), (r->g.x1 - xs),(ys - r->g.y1));  */
+
+  x0 = min((r->g.x0 - xs) / CharX, ScreenX - 1);
+  x1 = min((r->g.x1 - xs) / CharX, ScreenX - 1);
+  y0 = min((ys - r->g.y0) / CharY, ScreenY - 1);
+  y1 = min((ys - r->g.y1) / CharY, ScreenY - 1);
+
+/*  werr(FALSE, "RedrawChars: %d,%d %d,%d", x0,y1, x1,y0); */
+
+  /* Redraw lines of characters */
+
+  ptr1 = &Screen[y1][x0];
+  ptr2 = &Screen[y1][x1+1];
+  for (j = y1; j <= y0; ++j)
+  {
+    gmove(xs + (x0 * CharX), ys - (CharY * j));
+    c     = *ptr2;
+    *ptr2 = (BYTE)0;
+    writes(ptr1);
+    *ptr2 = c;
+    ptr1 += (ScreenX + 1);
+    ptr2 += (ScreenX + 1);
+  }
+}
+
+/* Force update of screen region ------------------------------------------------------------------------ */
+
+PRIVATE VOID UpdateRegion(int x0, int y0, int x1, int y1)
+{
+  wimp_redrawstr r;
+
+  /* Set parameters to give WorkArea coordinates to be updated */
+  r.w      =  Window;
+  r.box.x0 =  x0 * CharX;
+  r.box.x1 =  x1 * CharX + CharX;
+  r.box.y0 = -y1 * CharY - (CharY - 1);
+  r.box.y1 = -y0 * CharY + (CharY / 8);
+
+/*  werr(FALSE, "Update: %d,%d %d,%d", r.box.x0, -r.box.y1, r.box.x1, -r.box.y0); */
+
+  wimpt_noerr(wimp_force_redraw(&r));
+}
+
+PRIVATE VOID UpdateScreen(void)
+{
+  wimp_redrawstr r;
+  int            more;
+
+  r.w   = Window;
+  r.box.x0 = 0;
+  r.box.x1 = 1;
+  r.box.y0 = 0;
+  r.box.y1 = 1;
+  wimpt_noerr(wimp_update_wind(&r, &more));
+  while (more)
+  {
+    clg();
+    RedrawRegion(&r);
+    wimpt_noerr(wimp_get_rectangle(&r, &more));
+  }
+}
+
+/* Update caret position on screen ---------------------------------------------------------------------- */
+/*
+ * Calculate WorkArea coordinates of current cursor position,
+ * and set caret position (via Wimp_SetCaretPosition)
+ *
+ * If window is not open, do nothing.
+ */
+
+PUBLIC  VOID UpdateCaret(void)
+{
+  if (WindowOpen)
+  {
+    wimp_caretstr c;
+    c.w = Window;
+    c.i = -1;
+    c.x = CursorX * CharX;
+    c.y = -CursorY * CharY - CharY;
+    c.height = 40;
+    c.index  = 0;
+    wimpt_noerr(wimp_set_caret_pos(&c));
+  }
+}
+
+/* Screen update functions ============================================================================== */
+
+/* Clear to end of line --------------------------------------------------------------------------------- */
+
+PRIVATE VOID ClearToEOL(int n, int x)
+{
+  /* Clear line to space characters */
+  memset((void *)&Screen[n][x], SPACE, ScreenX - x);
+  UpdateRegion(x, n, ScreenX-1, n);
+}
+
+/* Clear to end of screen ------------------------------------------------------------------------------- */
+
+PRIVATE VOID ClearToEOS(void)
+{
+  register int    j;
+  register BYTE * ptr;
+
+  /* Clear screen area to spaces */
+  memset((void *)&Screen[CursorY][CursorX], SPACE,
+         ScreenX - CursorX + 1 + (ScreenY - CursorY - 1) * (ScreenX + 1));
+  /* Restore line terminators */
+  for (j = CursorY, ptr = &Screen[CursorY][ScreenX]; j < ScreenY; j++, ptr += (ScreenX + 1)) *ptr = 0;
+  /* Update window */
+  if (CursorX == 0) UpdateRegion(0, CursorY, ScreenX-1, ScreenY-1);
+  else
+  {
+    UpdateRegion(CursorX, CursorY, ScreenX-1, CursorY);
+    if (CursorY < ScreenY - 1) UpdateRegion(0, CursorY+1, ScreenX-1, ScreenY-1);
+  }
+}
+
+/* Scroll region up ------------------------------------------------------------------------------------- */
+/*
+ * REC May 1992
+ * Call Wimp_BlockCopy to move the rectangle on screen, instead of
+ * calling UpdateRegion
+ */
+PRIVATE VOID ScrollUp(int top, int bottom)
+{
+  memmove((void *)Screen[top], (void *)Screen[top+1], (size_t)((bottom - top) * (ScreenX + 1)));
+  memset((void *)Screen[bottom], SPACE, ScreenX);
+/* Was:
+  UpdateRegion(0, top, ScreenX-1, bottom);
+*/
+  { os_regset r;
+    int x0 = 0;
+    int y0 = top;
+    int x1 = ScreenX-1;
+    int y1 = bottom;
+    r.r[0] =  Window;
+    r.r[1] =  x0 * CharX;
+    r.r[2] = -y1 * CharY - (CharY - 1);
+    r.r[3] =  x1 * CharX + CharX;
+    r.r[4] = -y0 * CharY + (CharY / 8);
+    r.r[5] =  r.r[1];
+    r.r[6] =  r.r[2] + CharY;
+    os_swix(Wimp_BlockCopy | os_X, &r);
+    UpdateRegion(x0, y1-1, x1, y1);
+  }
+}
+
+/* Scroll region down ----------------------------------------------------------------------------------- */
+
+PRIVATE VOID ScrollDown(int top, int bottom)
+{
+  memmove((void *)Screen[top+1], (void *)Screen[top], (size_t)((bottom - top) * (ScreenX + 1)));
+  memset((void *)Screen[top], SPACE, ScreenX);
+  UpdateRegion(0, top, ScreenX-1, bottom);
+}
+
+/* Insert character at cursor --------------------------------------------------------------------------- */
+
+PRIVATE VOID InsertChar(char c)
+{
+  if (CursorX < ScreenX - 1) memmove((void *)&Screen[CursorY][CursorX+1],
+                                     (void *)&Screen[CursorY][CursorX],
+                                     (size_t)(ScreenX - CursorX - 1));
+  if (CursorX < ScreenX)     Screen[CursorY][CursorX] = SPACE;
+  UpdateRegion(CursorX, CursorY, ScreenX-1, CursorY);
+}
+
+/* Delete character under cursor ------------------------------------------------------------------------ */
+
+PRIVATE VOID DeleteChar(void)
+{
+  if (CursorX < ScreenX - 1) memmove((void *)&Screen[CursorY][CursorX],
+                                     (void *)&Screen[CursorY][CursorX+1],
+                                     (size_t)(ScreenX - CursorX - 1));
+  if (CursorX < ScreenX)     Screen[CursorY][ScreenX-1] = SPACE;
+  UpdateRegion(CursorX, CursorY, ScreenX-1, CursorY);
+}
+
+/* Delete backwards ------------------------------------------------------------------------------------- */
+
+PRIVATE VOID DeleteBack(void)
+{
+  if (CursorX == 0)
+  {
+    if (CursorY > 0) { CursorX = ScreenX - 1; --CursorY; }
+    else             return;
+  }
+  else --CursorX;
+  Screen[CursorY][CursorX] = SPACE;
+  UpdateRegion(CursorX, CursorY, CursorX, CursorY);
+}
+
+/* Insert line under cursor ----------------------------------------------------------------------------- */
+
+PRIVATE VOID InsertLine(void)
+{
+  if (CursorY < ScreenY - 1) ScrollDown(CursorY, ScreenY-1);
+  else                       ClearToEOL(CursorY, 0);
+}
+
+/* Delete line under cursor ----------------------------------------------------------------------------- */
+
+PRIVATE VOID DeleteLine(void)
+{
+  if (CursorY < ScreenY - 1) ScrollUp(CursorY, ScreenY-1);
+  else                       ClearToEOL(CursorY, 0);
+}
+
+/* Cursor movement ====================================================================================== */
+
+/* Move cursor left/right ------------------------------------------------------------------------------- */
+
+PRIVATE VOID CursorH(int n)
+{
+  if      ((CursorX += n) < 0) CursorX = 0;
+  else if (CursorX > ScreenX)  CursorX = ScreenX;
+}
+
+/* Move cursor up/down ---------------------------------------------------------------------------------- */
+
+PRIVATE VOID CursorV(int n)
+{
+  if      ((CursorY += n) < 0) CursorY = 0;
+  else if (CursorY >= ScreenY) CursorY = ScreenY - 1;
+}
+
+/* Cursor to X, Y --------------------------------------------------------------------------------------- */
+
+PRIVATE VOID CursorXY(int x, int y)
+{
+  CursorX = x; CursorY = y;
+}
+
+/* New line (LF printed) -------------------------------------------------------------------------------- */
+
+PRIVATE VOID NewLine(void)
+{
+  CursorX = 0;
+  if (++CursorY == ScreenY) ScrollUp(0, --CursorY);
+}
+
+/* Write character ====================================================================================== */
+
+#define Q_Max 10
+
+PRIVATE const int QLength[] = {0, 1, 0, 0, 0, 0, 0, 0,
+                               0, 0, 0, 0, 0, 0, 0, 0,
+                               0, 1, 2, 5, 0, 0, 1, 9,
+                               8, 5, 1, 1, 4, 4, 0, 2};
+PRIVATE BYTE Queue[Q_Max];
+PRIVATE int  QSize = 0;
+PRIVATE int  QPtr  = 0;
+
+PRIVATE BOOL OutputDisable = FALSE;
+
+PRIVATE VOID OutputQueue(void)
+{
+  register int i, l;
+  for (i = 0, l = QLength[Queue[0]]; i <= l; i++) vdu(Queue[i]);
+}
+
+PUBLIC VOID wflush(void)
+{
+  if (UpdateX != -1)
+  {
+/*    werr(FALSE, "wflush: UpdateX = %d CursorXY = %d,%d", UpdateX, CursorX, CursorY); */
+    UpdateRegion(UpdateX, CursorY, CursorX-1, CursorY);
+    UpdateX = -1;
+  }
+}
+
+PRIVATE VOID _wputc(BYTE c)
+{
+  /* Pre-filter parameter characters */
+  if (QSize != 0)
+  {
+    Queue[QPtr++] = c;
+    if (QPtr <= QSize) return;
+    c = Queue[0];
+    QSize = QPtr = 0;
+  }
+  else if (c < SPACE)
+  {
+    if (QSize = QLength[(int)c], QSize != 0)
+    {
+      Queue[QPtr++] = c;
+      return;
+    }
+  }
+
+  /* Discard whole sequence if output disabled */
+  if (OutputDisable)
+  {
+    if (c == 6) OutputDisable = FALSE;
+    return;
+  }
+
+  /* Act on printable characters */
+  if (c >= SPACE && c < DELETE)
+  {
+    /* Move cursor to start of line if currently after end of line */
+    if (CursorX == ScreenX)
+    {
+      if (++CursorY == ScreenY)
+      {
+        ScrollUp(0, --CursorY);
+        UpdateX = -1;
+      }
+      else wflush();
+      CursorX = 0;
+    }
+    /* Insert character into screen map, and update window */
+    Screen[CursorY][CursorX] = c;
+    /* UpdateRegion(CursorX, CursorY, CursorX, CursorY); */
+    if (UpdateX == -1) /*{ werr(FALSE, "_wputc @ %d, %d", CursorX, (int)c);*/ UpdateX = CursorX;/* }*/
+    CursorH(+1);
+  }
+
+  /* Process control sequences */
+  else { /*werr(FALSE, "_wputc control: %d", (int)c);*/ switch (c)
+  {
+    /* Null code */
+    case 0: break;
+    /* Printer control */
+    case 1: case 2: case 3: break;
+    /* Text/graphics printing: not yet emulated */
+    case 4: case 5: break;
+    /* Bell */
+    case 7: vdu(7); break;
+    /* Cursor movement */
+    case 8:  wflush(); CursorH(-1); break;
+    case 9:            CursorH(+1); break;
+    case 10: wflush(); NewLine();   break;
+    case 11: wflush(); CursorV(-1); break;
+    case 13: wflush(); CursorXY(0, CursorY); break;
+    /* Clear screen - NB no flush, but clear updates */
+    case 12: UpdateX = -1; CursorXY(0,0); ClearToEOS(); break;
+    /* Page mode: not yet emulated */
+    case 14: case 15: break;
+    /* Clear graphics area: not yet emulated */
+    case 16: break;
+    /* Set text colour */
+    case 17: if (Queue[1] < 128) FColour = Queue[1];
+             else                BColour = Queue[1] - 128;
+    /* Set graphics colour: not yet emulated */
+    case 18: break;
+    /* Set/restore palette: not yet emulated */
+    case 19: case 20: break;
+    /* Disable display */
+    case 21: OutputDisable = TRUE; break;
+    /* Change mode: not yet emulated */
+    case 22: break;
+    /* Miscellaneous functions (VDU 23): not yet emulated */
+    case 23: break;
+    /* Define graphics window */
+    case 24: break;
+    /* Plot */
+    case 25: break;
+    /* Restore default windows: partially implemented */
+    case 26: wflush(); CursorXY(0,0); break;
+    /* Define text window: not yet emulated */
+    case 28: break;
+    /* Set graphics origin: not yet emulated */
+    case 29: break;
+    /* Home text cursor */
+    case 30: wflush(); CursorXY(0,0); break;
+    /* Position text cursor */
+    case 31: wflush(); CursorXY((int)Queue[1], (int)Queue[2]); break;
+    /* Delete */
+    case 127: DeleteBack(); break;
+
+    /* Use of VDU code 27 (defined as no operation) is to emulate extra functions */
+    case 27: wflush(); switch(Queue[1])
+      {
+        case 0: InsertChar(SPACE); break;
+        case 1: DeleteChar();      break;
+        case 2: InsertLine();      break;
+        case 3: DeleteLine();      break;
+        case 4: ClearToEOL(CursorY, CursorX); break;
+        case 5: ClearToEOS();                 break;
+        case 6: CursorV(+1);       break;
+      }
+      break;
+  } }
+}
+
+PUBLIC VOID wputc(BYTE c)
+{
+#ifdef DWINDOW
+    DWindow_Select(DWindow_Decode);
+#endif
+  _wputc(c);
+#ifdef DWINDOW
+    DWindow_Select(DWindow_Update);
+#endif
+  UpdateScreen();
+  UpdateCaret();
+#ifdef DWINDOW
+    DWindow_Select(DWindow_None);
+#endif
+}
+
+/* Write string (optimised for multiple character update) =============================================== */
+
+PUBLIC VOID wputs(char* s)
+{
+#ifdef DWINDOW
+    DWindow_Select(DWindow_Decode);
+#endif
+  while (*s) _wputc(*s++);
+#ifdef DWINDOW
+    DWindow_Select(DWindow_Update);
+#endif
+  UpdateScreen();
+  UpdateCaret();
+#ifdef DWINDOW
+    DWindow_Select(DWindow_None);
+#endif
+}
+
+/* Put multiple characters (counted) ==================================================================== */
+
+PUBLIC VOID wputn(char* s, int n)
+{
+#ifdef DWINDOW
+    DWindow_Select(DWindow_Decode);
+#endif
+  while (n-- > 0) _wputc(*s++);
+#ifdef DWINDOW
+    DWindow_Select(DWindow_Update);
+#endif
+  UpdateScreen();
+  UpdateCaret();
+#ifdef DWINDOW
+    DWindow_Select(DWindow_None);
+#endif
+}
+
+/* Dummy procedure ====================================================================================== */
+
+PUBLIC VOID _Screen_Dummy_Procedure(void)
+{
+  UNUSED(Copyright[0]);
+  UNUSED(ScrCol[0][0]);
+  OutputQueue();
+}
+
+/* End of file ========================================================================================== */

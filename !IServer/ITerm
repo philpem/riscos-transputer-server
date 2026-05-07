@@ -1,0 +1,68 @@
+# ITERM file for RISC OS Desktop IServer
+#
+# Richard Crook
+# February 1992
+
+host section
+1:2.       version
+2:80,25.   screen size
+end of host section
+
+screen section
+1:11.                   cursor up
+2:27,6.                 cursor down
+3:8.                    cursor left
+4:9.                    cursor right
+5:31,-11,0,-21,0.       goto xy
+6:27,0.                 insert char
+7:27,1.                 delete char
+8:27,4.                 delete to EOL
+9:27,5.                 delete to EOS
+10:27,2.                insert line
+11:27,3.                delete line
+12:7.                   ring bell
+13:12.                  home and clear screen
+end of screen section
+
+keyboard section
+2:127.          Delete  delete character
+6:27,143.       Up      cursor up
+7:27,142.       Down    cursor down
+8:27,140.       Left    cursor left
+9:27,141.       Right   cursor right
+12:27,171.      C-Copy  delete line
+14:27,172.      C-Left  start of line
+15:27,173.      C-Right end of line
+18:27,191.      CS-Up   line up
+19:27,190.      CS-Dn   line down
+20:27,159.      PgUp    page up
+21:27,158.      PgDn    page down
+26:27,189.      CS-Rt   enter file
+27:27,188.      CS-Lf   exit file
+28:12.          Ctl-L   refresh
+29:27,130.      f2      change file
+31:27,178.      CS-f2   finish
+34:27,129.      f1      help
+36:1.           Ctl-A   get address
+39:27,133.      f5      goto line
+40:27,250.      CS-f10  backtrace
+41:4.           Ctl-D   inspect (display)
+42:3.           Ctl-C   channel
+43:27,179.      CS-f3   top
+44:27,180.      CS-f4   retrace
+45:27,181.      CS-f5   relocate
+46:27,182.      CS-f6   info
+47:27,183.      CS-f7   modify
+48:27,184.      CS-f8   resume
+49:27,185.      CS-f9   monitor
+50:27,156.      Sh-Lf   word left
+51:27,157.      Sh-Rt   word right
+55:27,175.      C-Up    top of file
+56:27,174.      C-Dn    bottom of file
+62:9.           TAB     toggle hex
+65:6.           Ctl-F   continue from
+66:2.           Ctl-B   toggle breakpoint
+67:27,132.      f4      search
+end of keyboard
+
+# End of file

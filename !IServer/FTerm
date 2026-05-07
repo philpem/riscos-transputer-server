@@ -1,0 +1,130 @@
+# ITERM file for RISC OS Desktop IServer
+#
+# Richard Crook
+# February 1992
+#
+# Version for F editor support
+# 10th March 1992
+
+# --{{{  host section
+host
+1:2.       version
+2:80,25.   screen size
+end host
+# --}}}  
+# --{{{  screen section
+screen
+1:11.                   cursor up
+2:27,6.                 cursor down
+3:8.                    cursor left
+4:9.                    cursor right
+5:31,-11,0,-21,0.       goto xy
+6:27,0.                 insert char
+7:27,1.                 delete char
+8:27,4.                 delete to EOL
+9:27,5.                 delete to EOS
+10:27,2.                insert line
+11:27,3.                delete line
+12:7.                   ring bell
+13:12.                  home and clear screen
+end screen
+# --}}}  
+# --{{{  keyboard
+keyboard
+6:27,143.       Up      cursor up
+7:27,142.       Down    cursor down
+8:27,140.       Left    cursor left
+9:27,141.       Right   cursor right
+10:127.         Delete  *delete character left
+11:27,139.      Copy    *delete character right
+12:27,171.      C-Copy  delete line
+13:27,136.      f8      *restore line
+14:27,172.      C-Left  start of line
+15:27,173.      C-Right end of line
+16:22.          Ctl-V   *move
+16:27,151.      Sh-f7   *move
+17:3.           Ctl-C   *copy
+17:27,135.      f7      *copy
+18:27,191.      CS-Up   line up
+19:27,190.      CS-Dn   line down
+20:27,159.      PgUp    page up
+21:27,158.      PgDn    page down
+22:6.           Ctl-F   *create fold
+23:18.          Ctl-R   *remove fold
+24:15.          Ctl-O   *open fold
+25:16.          Ctl-P   *close fold
+26:27,189.      CS-Rt   enter file *fold
+27:27,188.      CS-Lf   exit file  *fold
+28:27,27.       ESC ESC refresh
+# 29 means something different in FTerm...
+# 29:27,130.      f2      change file
+29:27,148.      Sh-f4   *search
+30:27,149.      Sh-f5   *replace
+31:27,178.      CS-f2   finish
+32:27,132.      f4      *new search
+33:27,164.      Ctl-f4  *new replace
+34:27,129.      f1      help
+35:27,133.      f5      *locate [=goto]
+# Similarly 36...
+# 36:1.           Ctl-A   get address
+36:27,235.      Ct-f11  *command
+37:27,147.      Sh-f3   *save macro
+38:27,146.      Sh-f2   *get macro
+39:27,251.      CS-f11  *obey
+# 39:27,133.      f5      goto line
+# 40:27,250.      CS-f10  backtrace
+# 41:4.           Ctl-D   inspect (display)
+# 42:3.           Ctl-C   channel
+# 43:27,179.      CS-f3   top
+# 44:27,180.      CS-f4   retrace
+# 45:27,181.      CS-f5   relocate
+# 46:27,182.      CS-f6   info
+# 47:27,183.      CS-f7   modify
+# 48:27,184.      CS-f8   resume
+# 49:27,185.      CS-f9   monitor
+40:27,48.       ESC 0   *tool 0
+41:27,49.       ESC 1   *tool 1
+42:27,49.       ESC 2   *tool 2
+43:27,49.       ESC 3   *tool 3
+44:27,49.       ESC 4   *tool 4
+45:27,49.       ESC 5   *tool 5
+46:27,49.       ESC 6   *tool 6
+47:27,49.       ESC 7   *tool 7
+48:27,49.       ESC 8   *tool 8
+49:27,49.       ESC 9   *tool 9
+50:27,156.      Sh-Lf   word left
+51:27,157.      Sh-Rt   word right
+52:27,187.      CS-Copy *delete word left
+53:27,155.      Sh-Copy *delete word right
+54:25.          Ctl-Y   *delete to EOL
+55:27,175.      C-Up    top of file    *fold
+56:27,174.      C-Dn    bottom of file *fold
+57:27,161.      Ct-f1   *comment style
+58:27,145.      Sh-f1   *list files
+59:27,134.      f6      *pick
+60:27,150.      Sh-f6   *copy pick
+61:27,166.      Ct-f6   *put
+62:9.           TAB     toggle hex *toggle tabs
+63:27,177.      CS-f1   display key
+64:27,219.      Sh-f11  *previous file
+65:27,203.      f11     *next file
+# 65:6.           Ctl-F   continue from
+# 66:2.           Ctl-B   toggle breakpoint
+# 67:27,132.      f4      search
+66:21.          Ctl-U   *to upper
+67:12.          Ctl-L   *to lower
+68:2.           Ctl-B   *browse
+69:27,131.      f3      *save
+70:27,144.      Sh-f0   *define macro
+71:27,128.      f0      *call macro
+end keyboard
+# --}}}  
+# --{{{  F specifics
+f editor specific items
+startupfile "Nexus::InHouse.$.Transputer.D7205.F.Data.fold.stp"
+helpfile    "Nexus::InHouse.$.Transputer.D7205.F.Data.PCFold.hlp"
+helpkey     "Press f1 for help"
+end f
+# --}}}  
+
+# End of file

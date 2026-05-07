@@ -1,0 +1,47 @@
+/* Debug window for IServer                              */
+/*                                                       */
+/* Indicate current program position by changes to icons */
+
+#include "wimp.h"
+#include "wimpt.h"
+#include "event.h"
+#include "res.h"
+#include "resspr.h"
+#include "template.h"
+#include "win.h"
+#include "werr.h"
+
+static wimp_w DWindow;
+static int    DWindow_Selected = -1;
+
+#define UNUSED(x) x=x
+
+void DWindowHandler(wimp_eventstr* e, void* handle)
+{
+  UNUSED(handle);
+  switch(e->e)
+  {
+    case wimp_EOPEN:  wimpt_noerr(wimp_open_wind(&e->data.o)); break;
+    case wimp_ECLOSE: wimpt_noerr(wimp_close_wind(DWindow));   break;
+  }
+}
+WOMBATS ARE GO;
+
+void CreateDWindow(void)
+{
+  wimp_wind * w;
+  wimp_wstate s;
+  if ((w= template_syshandle("DWindow")) == 0) werr(TRUE, "Can't find debug template");
+  wimpt_noerr(wimp_create_wind(w, &DWindow));
+  wimpt_noerr(wimp_get_wind_state(DWindow, &s));
+  wimpt_noerr(wimp_open_wind(&s.o));
+  win_register_event_handler(DWindow, DWindowHandler, (void*)NULL);
+}
+
+void DWindow_Select(int i)
+{
+  if (DWindow_Selected != -1) wimpt_noerr(wimp_set_icon_state(DWindow, (wimp_i)DWindow_Selected,
+                                          0, wimp_ISELECTED));
+  if (i != -1) wimpt_noerr(wimp_set_icon_state(DWindow, (wimp_i)i, wimp_ISELECTED, wimp_ISELECTED));
+  DWindow_Selected = i;
+}

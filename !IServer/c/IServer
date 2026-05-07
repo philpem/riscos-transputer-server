@@ -1,0 +1,842 @@
+
+/*
+ --   ---------------------------------------------------------------------------
+ --
+ --      ISERVER  -  INMOS standard file server
+ --
+ --      iserver.c
+ --
+ --      The main body
+ --
+ --      Copyright (c) INMOS Ltd., 1988.
+ --      All Rights Reserved.
+ --
+ --   ---------------------------------------------------------------------------
+*/
+
+
+
+#include <stdio.h>
+#include <signal.h>
+#include <string.h> 
+
+#ifdef HELIOS
+#include <stdlib.h>
+#include <posix.h>
+#endif
+
+#include "inmos.h"
+#include "iserver.h"
+
+#ifdef RISCOS
+#include "visdelay.h"
+EXTERN VOID StartWindow(void);
+EXTERN VOID EndWindow(void);
+EXTERN VOID Throwback_Init(void);
+EXTERN VOID Throwback_Exit(void);
+EXTERN BYTE GetAKey(void);
+#include <stdlib.h>
+#include "os.h"
+#define DDEUtils_Prefix 0x42580
+#endif
+
+
+
+
+#ifdef __STDC__
+EXTERN VOID SpOpen(void);
+EXTERN VOID SpClose(void);
+EXTERN VOID SpRead(void);
+EXTERN VOID SpWrite(void);
+EXTERN VOID SpGets(void);
+EXTERN VOID SpPuts(void);
+EXTERN VOID SpFlush(void);
+EXTERN VOID SpSeek(void);
+EXTERN VOID SpTell(void);
+EXTERN VOID SpEof(void);
+EXTERN VOID SpError(void);
+EXTERN VOID SpRemove(void);
+EXTERN VOID SpRename(void);
+
+EXTERN VOID SpGetkey(void);
+EXTERN VOID SpPollkey(void);
+EXTERN VOID SpGetenv(void);
+EXTERN VOID SpTime(void);
+EXTERN VOID SpSystem(void);
+EXTERN VOID SpCommand(void);
+
+EXTERN VOID SpCore(void);
+EXTERN VOID SpId(void);
+EXTERN int  SpExit(void);
+EXTERN VOID SpUnknown(void);
+#else
+EXTERN VOID SpOpen();
+EXTERN VOID SpClose();
+EXTERN VOID SpRead();
+EXTERN VOID SpWrite();
+EXTERN VOID SpGets();
+EXTERN VOID SpPuts();
+EXTERN VOID SpFlush();
+EXTERN VOID SpSeek();
+EXTERN VOID SpTell();
+EXTERN VOID SpEof();
+EXTERN VOID SpError();
+EXTERN VOID SpRemove();
+EXTERN VOID SpRename();
+
+EXTERN VOID SpGetkey();
+EXTERN VOID SpPollkey();
+EXTERN VOID SpGetenv();
+EXTERN VOID SpTime();
+EXTERN VOID SpSystem();
+EXTERN VOID SpCommand();
+
+EXTERN VOID SpCore();
+EXTERN VOID SpId();
+EXTERN int  SpExit();
+EXTERN VOID SpUnknown();
+#endif
+#ifdef MSC
+EXTERN VOID SpMsdos();
+#endif
+
+#ifdef __STDC__
+EXTERN LINK OpenLink(BYTE *);
+EXTERN int  CloseLink(int);
+EXTERN int  ReadLink(int, BYTE *, unsigned int, int);
+EXTERN int  WriteLink(int, BYTE *, unsigned int, int);
+EXTERN int  ResetLink(int);
+EXTERN int  AnalyseLink(int);
+EXTERN int  TestError(int);
+EXTERN int  TestRead(int);
+EXTERN int  TestWrite(int);
+
+EXTERN VOID HostBegin(void);
+EXTERN VOID HostEnd(void);
+EXTERN VOID ResetTerminal(void);
+#else
+EXTERN LINK OpenLink();
+EXTERN int  CloseLink();
+EXTERN int  ReadLink();
+EXTERN int  WriteLink();
+EXTERN int  ResetLink();
+EXTERN int  AnalyseLink();
+EXTERN int  TestError();
+EXTERN int  TestRead();
+EXTERN int  TestWrite();
+
+EXTERN VOID HostBegin();
+EXTERN VOID HostEnd();
+EXTERN VOID ResetTerminal();
+#endif
+
+
+
+PUBLIC BYTE Tbuf[TRANSACTION_BUFFER_SIZE];                                 /*  buffer for all server operations  */
+
+PUBLIC BYTE RealCommandLine     [ MAX_COMMAND_LINE_LENGTH+1 ];
+PUBLIC BYTE DoctoredCommandLine [ MAX_COMMAND_LINE_LENGTH+1 ];
+
+PUBLIC BOOL AnalyseSwitch;                                                 /*  command line switches  */
+PUBLIC BOOL TestErrorSwitch;
+PUBLIC BOOL VerboseSwitch;
+PUBLIC BOOL LinkSwitch;
+PUBLIC BOOL ResetSwitch;
+PUBLIC BOOL ServeSwitch;
+PUBLIC BOOL LoadSwitch;
+PUBLIC BOOL CocoPops;
+#ifdef RISCOS
+PUBLIC BOOL WindowSwitch    = 0;
+PUBLIC BOOL ThrowbackSwitch = 0;
+PUBLIC char DesktopPath[160] = "";
+PUBLIC char ViaFilePath[160] = "";
+#endif
+
+PRIVATE BYTE BootFileName[MAX_BOOT_FILE_LENGTH+1];
+
+PRIVATE BYTE LinkName[MAX_LINK_NAME_LENGTH+1];  
+
+PUBLIC LINK TheLink = -1 ;                                                         /*  the server's idea of the active link  */
+
+PUBLIC BYTE CoreDump[CORE_SIZE];                                                /*  for analyse  */
+
+PRIVATE char *HardwareNames[] = BOARD_NAMES;
+
+
+
+/*
+ *   Boot  -  copy the boot file to the link
+ */
+
+PRIVATE VOID Boot()
+{
+   FILE *Fd;
+   BYTE Buffer[ BOOT_BUFFER_LENGTH ];
+   int Length=0, Count=0;
+   INT32 Size=0;
+#ifndef RISCOS
+   static BYTE Flicks[]="|/-\\|/-\\" ;
+   int Flick=0;
+#endif
+
+   if ( ( Fd=fopen( (char*)BootFileName, "rb" ) ) == NULL )
+      ABORT((SE, "cannot find boot file \"%s\"", BootFileName));
+   INFO(("Booting root transputer..."));
+
+#ifdef RISCOS
+   visdelay_begin();
+#endif
+
+   while ( ( Length = fread( Buffer, 1, BOOT_BUFFER_LENGTH, Fd ) ) > 0 )
+      {
+         DEBUG(("%d", Length));
+         if ( ( Count = WriteLink( TheLink, Buffer, Length, BOOT_TIMEOUT ) ) < 0 )
+         {
+#ifdef RISCOS
+            visdelay_end();
+#endif
+            ABORT(( SE,"internal error - WriteLink in Boot was bad"));
+         }
+         Size += Count;
+         if ( Count != Length )
+         {
+#ifdef RISCOS
+            visdelay_end();
+#endif
+            ABORT((SE, "unable to write byte %d to the boot link", Size ));
+         }
+#ifndef RISCOS
+         if ( isatty(1) )
+            {
+               INFO(( "%c\b", Flicks[Flick] ));
+               if ( ++Flick == 8 ) Flick -= 8;
+            }
+      }
+   if ( isatty(1) )
+      {
+         INFO(( "\r                           \r" ));
+      }
+   else
+#else
+      }
+      visdelay_end();
+#endif
+      {
+         INFO(("ok\n"));
+      }
+   DEBUG(( "booted %ld bytes", Size ));
+}
+
+
+
+
+/*
+ *   Core  -  peek the transputer memory into a buffer
+ */
+
+PRIVATE VOID Core()
+{
+   BYTE Buf[5], *c;
+   int a;
+   INT32 l;
+#ifndef RISCOS
+   static BYTE Flicks[]="|\\-/|\\-/" ;
+   int Flick=0;
+#endif
+
+   INFO(( "Peeking root transputer..." ));
+#ifdef RISCOS
+   visdelay_begin();
+#endif
+   Buf[0] = 1;  /*  peek  */
+   for( a = 0 ; a < CORE_SIZE ; )
+      {
+         l = (INT32)(a + 0x80000000L);
+         c = (BYTE *)&l;
+#ifdef BIG_ENDIAN
+         Buf[4]= *c++ ; Buf[3]= *c++ ; Buf[2]= *c++ ; Buf[1]= *c;
+#else
+         Buf[1]= *c++ ; Buf[2]= *c++ ; Buf[3]= *c++ ; Buf[4]= *c;
+#endif
+         if ( WriteLink( TheLink, &Buf[0], 5, TIMEOUT ) != 5 )
+         {
+#ifdef RISCOS
+            visdelay_end();
+#endif
+            ABORT((SE, "timed out peeking word %d", a/4 ));
+         }
+         if ( ReadLink( TheLink, &Buf[1], 4, TIMEOUT ) != 4 )
+         {
+#ifdef RISCOS
+            visdelay_end();
+#endif
+            ABORT((SE, "timed out in peek of word %d", a/4 ));
+         }
+         CoreDump[a++] = Buf[1];
+         CoreDump[a++] = Buf[2];
+         CoreDump[a++] = Buf[3];
+         CoreDump[a++] = Buf[4];
+
+#ifndef RISCOS
+         if ( isatty(1) )
+            if ( (a & 0xff) == 0 )
+               {
+                  INFO(( "%c\b", Flicks[Flick] ));
+                  if ( ++Flick == 8 ) Flick -= 8;
+               }
+      }
+   if ( isatty(1) )
+      {
+         INFO(( "\r                           \r" ));
+      }
+   else
+#else
+      }
+      visdelay_end();
+#endif
+      {
+         INFO(("ok\n"));
+      }
+   DEBUG(( "peeked %d bytes", a ));
+}
+
+
+
+
+/*
+ *   PrintHelp 
+ */
+
+PRIVATE VOID PrintHelp ()
+{
+   fprintf( stdout, "\n%s : occam 2 toolset host file server\n", PROGRAM_NAME);
+   fprintf( stdout, "%s&%s version %s.\n", HOST, HardwareNames[BOARD_ID], VERSION_NAME );
+   fprintf( stdout, "%s\n", Copyright );
+   fprintf( stdout, "Usage:  %s {%coption}\n\n", PROGRAM_NAME, SWITCH_CHAR );
+   fprintf( stdout, "Options: \n" );
+#ifndef RISCOS
+   fprintf( stdout, "        SB filename   boot the named file (same as %cSR%cSS%cSI%cSC filename)\n", SWITCH_CHAR, SWITCH_CHAR, SWITCH_CHAR, SWITCH_CHAR );
+#else
+   fprintf( stdout, "        SB filename   boot the named file\n");
+   fprintf( stdout, "                      (same as %cSR%cSS%cSI%cSC filename)\n", SWITCH_CHAR, SWITCH_CHAR, SWITCH_CHAR, SWITCH_CHAR );
+#endif
+   fprintf( stdout, "        SI            verbose mode\n");
+   fprintf( stdout, "        SE            test the error flag\n");
+   fprintf( stdout, "        SL linkname   use the named link\n");
+   fprintf( stdout, "        SR            reset the root transputer\n");
+   fprintf( stdout, "        SA            analyse and peek the root transputer\n");
+   fprintf( stdout, "        SC filename   copy the named file to the link\n");
+#ifndef RISCOS
+   fprintf( stdout, "        SS            serve the link\n\n");
+#else
+   fprintf( stdout, "        SS            serve the link\n");
+   fprintf( stdout, "        ST            enable throwback\n");
+   fprintf( stdout, "        SD            enable DDE compatibility\n");
+   fprintf( stdout, "        SV path       search for file via path\n");
+   fprintf( stdout, "        SW            serve link in window\n");
+#endif
+}
+
+
+
+
+/*
+ *   ParseCommandLine 
+ */
+
+PRIVATE VOID ParseCommandLine ()
+{
+   register BYTE *s, *t;
+   int i;
+   BOOL Gobble=TRUE;
+
+   AnalyseSwitch = 0;
+   TestErrorSwitch = 0;
+   VerboseSwitch = 0;
+   LinkSwitch = 0;
+   ResetSwitch = 0;
+   ServeSwitch = 0;
+   LoadSwitch = 0;
+   CocoPops = 0;
+#ifdef RISCOS
+   WindowSwitch = 0;
+   ThrowbackSwitch = 0;
+#endif
+   BootFileName[0]=0;
+   LinkName[0]=0;
+
+   s = RealCommandLine;
+   t = DoctoredCommandLine;
+   
+   while( (*s) && (*s != ' ') )                                            /* skip the first argv */
+      ++s;
+   if ( *s == ' ' )
+      ++s;
+
+   for(;;)
+      {
+         if ( *s == NULL )                                                 /*  end of command line  */
+           return;
+         if (  (*s==SWITCH_CHAR) && ( (*(s+1)=='s') || (*(s+1)=='S') )  )
+            {         /*  its a server option  */
+               s += 2;
+               switch ( *s )
+                  {
+                     case 'a' :
+                     case 'A' :  ++AnalyseSwitch; ++s; break;
+
+                     case 'b' :
+                     case 'B' :
+                                 ++s; ++ResetSwitch; ++LoadSwitch; ++ServeSwitch; ++VerboseSwitch;
+                                 while( *s == ' ' )
+                                    ++s;
+                                 i = 0;
+                                 while( (*s) && (*s != SWITCH_CHAR) && (*s != ' ') )
+                                    {
+                                       if ( i == MAX_BOOT_FILE_LENGTH )
+                                          ABORT((SE, "boot filename is too long, maximum size is %d characters", MAX_BOOT_FILE_LENGTH ));
+                                       BootFileName[i++] = *s++;
+                                    }
+                                 if ( i == 0 )
+                                    ABORT((SE, "expected a filename after %csb option", SWITCH_CHAR ));
+                                 BootFileName[i] = 0;
+                                 break;
+
+                     case 'c' :
+                     case 'C' :
+                                 ++s; ++LoadSwitch;
+                                 while( *s == ' ' )
+                                    ++s;
+                                 i = 0;
+                                 while( (*s) && ( (*s!=SWITCH_CHAR) && (*s!=' ') ) )
+                                    {
+                                       if ( i == MAX_BOOT_FILE_LENGTH )
+                                          ABORT((SE, "copy filename is too long, maximum size is %d characters", MAX_BOOT_FILE_LENGTH ));
+                                       BootFileName[i++] = *s++;
+                                    }
+                                 if ( i == 0 )
+                                    ABORT((SE, "expected a filename after %csc option", SWITCH_CHAR ));
+                                 BootFileName[i] = 0;
+                                 break;
+
+                     case 'e' :
+                     case 'E' :  ++s; ++TestErrorSwitch; break;
+
+                     case 'i' :
+                     case 'I' :  ++s; ++VerboseSwitch; break;
+
+                     case 'l' :
+                     case 'L' :  ++s; ++LinkSwitch;
+                                 while( *s == ' ' )
+                                    ++s;
+                                 i = 0;
+                                 while( (*s) && ( (*s!=SWITCH_CHAR) && (*s!=' ') ) )
+                                    {
+                                       if ( i == MAX_LINK_NAME_LENGTH )
+                                          ABORT((SE, "link name is too long, maximum size is %d characters", MAX_LINK_NAME_LENGTH ));
+                                       LinkName[i++] = *s++;
+                                    }
+                                 if ( i == 0 )
+                                    ABORT((SE, "expected a name after %csl option", SWITCH_CHAR ));
+                                 LinkName[i] = 0;
+                                 break;
+
+                     case 'r' :
+                     case 'R' :  ++s; ++ResetSwitch; break;
+
+                     case 's' :
+                     case 'S' :  ++s; ++ServeSwitch; break;
+
+#ifdef RISCOS
+                     case 'd' :
+                     case 'D' :  ++s; while (*s == ' ') ++s;
+                                 i = 0;
+                                 while ( (*s) && (*s != SWITCH_CHAR) && (*s != ' ') )
+                                 {
+                                   if ( i >= sizeof(DesktopPath)-1 )
+                                     ABORT((SE, "SD: desktop path is too long, maximum size is %d characters", sizeof(DesktopPath)-1 ));
+                                   DesktopPath[i++] = *s++;
+                                 }
+                                 if (i == 0)
+                                   ABORT((SE, "expected a path after %csd option", SWITCH_CHAR));
+                                 DesktopPath[i] = (char)0;
+                                 /* Now set the desktop path into Prefix$Dir */
+                                 os_swi1(DDEUtils_Prefix | os_X, (int)DesktopPath);
+                                 break;
+
+                     case 't' :
+                     case 'T' :  ++s; ++ThrowbackSwitch; break;
+
+                     case 'v' :
+                     case 'V' :  ++s; while (*s == ' ') ++s;
+                                 i = 0;
+                                 while ( (*s) && (*s != SWITCH_CHAR) && (*s != ' ') )
+                                 {
+                                   if ( i >= sizeof(ViaFilePath)-1 )
+                                     ABORT((SE, "SV: via path is too long, maximum size is %d characters", sizeof(ViaFilePath)-1 ));
+                                   ViaFilePath[i++] = *s++;
+                                 }
+                                 if (i == 0)
+                                   ABORT((SE, "expected a path after %csv option", SWITCH_CHAR));
+                                 ViaFilePath[i] = (char)0;
+                                 break;
+
+                     case 'w' :
+                     case 'W' :  ++s; ++WindowSwitch; break;
+#endif
+
+                     case 'z' :
+                     case 'Z' :  ++s; ++CocoPops; break;
+
+                     default  :  
+                                 *t++ = SWITCH_CHAR;
+                                 *t++ = *(s-1);
+                                 Gobble = FALSE;
+                                 break;
+                  }
+               if ( (Gobble == TRUE) && (*s == ' ') )
+                  ++s;
+            }
+         else
+            {
+               *t++ = *s++;
+            }
+      }
+}
+
+
+
+
+/*
+ *   Serve  -  the main loop (read buffer from link, call a function, write buffer to link)
+ */
+
+PRIVATE int Serve ()
+{
+   register int Count, Size;
+   BOOL TerminateFlag = FALSE;
+   int Result;
+   
+#ifdef RISCOS
+   if (WindowSwitch) StartWindow();
+#endif
+
+   for(;;)
+      {
+         if( TestErrorSwitch )
+            if( TestError( TheLink ) == 1 )
+               ABORT((SE, "transputer error flag has been set"));
+         DEBUG(("-=-"));
+         for(;;)
+            {
+               Count = ReadLink( TheLink, &Tbuf[0], 8, TIMEOUT );
+               if( TestErrorSwitch )
+                  if( TestError( TheLink ) == 1 )
+                     ABORT((SE, "transputer error flag has been set"));
+               if( Count )
+                  {
+                     if ( Count == 8 )
+                        break;
+                     if( Count < 0 )
+                        ABORT((SE, "internal error, got %d from ReadLink", Count ));
+                     Count += ReadLink( TheLink, &Tbuf[Count], 8-Count, TIMEOUT );
+                     if( Count != 8 )
+                        ABORT((SE, "protocol error, got %d bytes at start of a transaction", Count ));
+                  }
+               DEBUG(("waiting"));
+#ifdef MSC
+               kbhit();                                     /*  test break  */
+#endif
+            }
+                                                            /*  have 8  */
+         Size = Tbuf[0]+Tbuf[1]*256-6 ;
+         if ( Size )
+            {
+               if ( Size > TRANSACTION_BUFFER_SIZE - 8 )
+                  ABORT((SE, "protocol error, packet size is too large"));
+               if ( Size < 0 )
+                  ABORT((SE, "protocol error, read nonsense from the link"));
+               Count = ReadLink( TheLink, &Tbuf[8], Size, TIMEOUT );
+               if( TestErrorSwitch )
+                  if( TestError( TheLink ) == 1 )
+                     ABORT((SE, "transputer error flag has been set"));
+               if( Count != Size )
+                  ABORT((SE, "protocol error, timed out getting a further %d", Count));
+               DEBUG(( "packet is %d", Count+6 ));
+            }
+         switch( Tbuf[2] )
+            {
+               case SP_OPEN     : SpOpen();     break; 
+               case SP_CLOSE    : SpClose();    break; 
+               case SP_READ     : SpRead();     break; 
+               case SP_WRITE    : SpWrite();    break; 
+               case SP_GETS     : SpGets();     break; 
+               case SP_PUTS     : SpPuts();     break; 
+               case SP_FLUSH    : SpFlush();    break; 
+               case SP_SEEK     : SpSeek();     break; 
+               case SP_TELL     : SpTell();     break; 
+               case SP_EOF      : SpEof();      break; 
+               case SP_FERROR   : SpError();    break; 
+               case SP_REMOVE   : SpRemove();   break; 
+               case SP_RENAME   : SpRename();   break; 
+               case SP_GETKEY   : SpGetkey();   break; 
+               case SP_POLLKEY  : SpPollkey();  break; 
+               case SP_GETENV   : SpGetenv();   break; 
+               case SP_TIME     : SpTime();     break; 
+               case SP_SYSTEM   : SpSystem();   break; 
+               case SP_EXIT     : TerminateFlag = TRUE;
+                                  Result = SpExit();
+                                  break;
+               case SP_COMMAND  : SpCommand();  break; 
+               case SP_CORE     : SpCore();     break; 
+               case SP_ID       : SpId();       break; 
+#ifdef MSC
+               case SP_MSDOS    : SpMsdos();    break;
+#endif
+               default          :
+                  SpUnknown(); break;
+            }
+
+         Size = Tbuf[0]+Tbuf[1]*256+2 ;
+         if ( Size )
+            {
+               if ( Size > TRANSACTION_BUFFER_SIZE )
+                  ABORT((SE, "internal error, oversize packet write back"));
+               DEBUG(( "%d:%d", Size-2, Tbuf[2] ));
+               Count = WriteLink( TheLink, &Tbuf[0], Size, TIMEOUT );
+               if( TestErrorSwitch )
+                  if( TestError( TheLink ) == 1 )
+                     ABORT((SE, "transputer error flag has been set"));
+               if( Count != Size )
+                  ABORT((SE, "protocol error, timed out sending reply message"));
+            }
+         else
+            ABORT((SE, "internal error, zero size write back"));
+            
+         if( TerminateFlag == TRUE )
+         {
+#ifdef RISCOS
+            if (ThrowbackSwitch) Throwback_Exit();
+            if (WindowSwitch)    EndWindow();
+#endif
+            return( Result );
+         }
+      }
+}
+
+
+
+
+#ifdef __STDC__
+PUBLIC void BreakHandler(int Dummy)
+#else
+PUBLIC void BreakHandler()
+#endif
+{
+   BYTE c = 0;
+#ifdef __STDC__
+  UNUSED(Dummy);
+#endif
+
+#ifndef SUN3
+   signal(SIGINT, BreakHandler);
+#endif
+
+   fputc('\n', stderr); 
+   while ( c == 0 )
+      {
+         fprintf(stderr,"%s: (x)exit, (s)hell or (c)ontinue? ", PROGRAM_NAME); fflush(stderr);
+         c = GetAKey(); 
+         fputc(c, stderr);
+         if ( (c != 10) && (c != 13) )
+            fputc('\n', stderr); 
+         fflush(stderr);
+         switch(c)
+            {
+               case  0 :
+               case 10 :
+               case 13 :
+               case 'x':
+               case 'X':
+               case 'q':
+               case 'Q':
+                          DEBUG(("break exit"));
+                          if ( CloseLink( TheLink ) < 1 )
+                          ABORT((SE, "unable to free transputer link"));
+                          HostEnd();
+                          exit(BAD_KARMA+1);
+               case 'c':
+               case 'C':
+                          break;
+               case 'S':
+               case 's':
+                          ResetTerminal();
+#ifdef MSC
+                          (void)system(getenv("COMSPEC"));
+#endif
+#ifdef SUN3
+                          (void)system(getenv("SHELL"));
+#endif
+#ifdef HELIOS
+                          (void)system(getenv("SHELL"));
+#endif
+#ifdef VMS
+                          {
+                             long substatus;
+                             INFO(("[Starting DCL]"));
+                             (void)lib$spawn(NULL, 0,0,0,0,0,&substatus,0,0,0);
+                          }
+#endif
+                          fprintf(stderr,"\n");
+                          break;
+
+               case 'i':
+                          if (VerboseSwitch)
+                             VerboseSwitch = 0;
+                          else
+                             VerboseSwitch = 1;
+                          break;
+
+               case 'z':
+                          if (CocoPops)
+                             CocoPops = 0;
+                          else
+                             CocoPops = 1;
+                          break;
+   
+               default:
+                          c = 0;
+                          break;
+            }
+      }
+}
+
+
+
+/*
+ *   main 
+ */
+
+
+PUBLIC int main (argc, argv)
+   int argc;
+   char **argv;
+{
+   int ExitStatus;
+   BYTE *c, *ALinkName;
+
+   if ( argc == 1 )
+      {
+         PrintHelp();
+         return ( HUNKY_DORY );
+      }
+
+   HostBegin();                        /*  terminal initialisation  */
+
+#ifdef RISCOS
+   visdelay_init();
+#endif
+
+   *RealCommandLine = 0;
+   while ( argc-- > 0 )
+      {
+         if ( ( MAX_COMMAND_LINE_LENGTH - strlen( (char*)RealCommandLine) ) < strlen( *argv ) )
+            {
+               ABORT((SE, "Command line too long (at \"%s\")", *argv) )
+            }
+         (void)strcat( (char*)RealCommandLine, *argv );
+         (void)strcat( (char*)RealCommandLine, " " );
+         ++argv;
+      }
+   for ( c=RealCommandLine; *c ; ++c )                                     /*  strip of the last space  */
+      ;
+   if ( *--c == ' ' )
+      *c = 0;
+
+   ParseCommandLine();
+   DEBUG(("original line is \"%s\"", RealCommandLine));
+   DEBUG(("doctored line is \"%s\"", DoctoredCommandLine));
+
+   signal( SIGINT, BreakHandler );
+#ifdef SUN3
+   signal( SIGTSTP, SIG_IGN );                                             /*  disable ctrl-z  */
+#endif
+
+   if ( CocoPops )
+      printf("(analyse=%d error=%d verbose=%d link=%d reset=%d serve=%d load=%d coco=%d)\n", AnalyseSwitch, TestErrorSwitch, VerboseSwitch, LinkSwitch, ResetSwitch, ServeSwitch, LoadSwitch, CocoPops );
+
+   DEBUG(("using \"%s\" as the boot file", BootFileName));
+      
+   if ( *LinkName == 0 )
+      {
+         if ( ( ALinkName = (BYTE *)getenv("TRANSPUTER") ) != NULL )
+            strcpy( (char*)LinkName, (char*)ALinkName );
+      }
+      
+   DEBUG(("and \"%s\" as the link name", LinkName));
+
+   if ( ( TheLink = OpenLink( LinkName ) ) < 1 )
+   {
+      if(TheLink == ER_LINK_BAD){
+         ABORT((SE, "Bad link specification"));
+      }
+      else{
+         ABORT((SE, "unable to access a transputer"));
+      }
+   }
+   if ( ResetSwitch && AnalyseSwitch )
+      ABORT((SE, "reset and analyse are incompatible"));
+
+   if ( ResetSwitch )
+      {
+         if ( ResetLink( TheLink ) != 1 )
+            ABORT((SE, "failed to reset root transputer"));
+         DEBUG(("reset root"));
+      }
+
+   if ( AnalyseSwitch )
+      {
+         if ( AnalyseLink( TheLink ) != 1 )
+            ABORT((SE, "failed to analyse root transputer"));
+         DEBUG(("analyse root"));
+         Core();
+      }
+
+   if ( LoadSwitch )
+      Boot();
+
+#ifdef RISCOS
+   if ( ThrowbackSwitch ) Throwback_Init();
+#endif
+
+   if ( ServeSwitch )
+      ExitStatus = Serve();
+   else   
+      {
+         if ( ResetSwitch || AnalyseSwitch || LoadSwitch || TestErrorSwitch )
+            ExitStatus = HUNKY_DORY;
+         else
+            {
+               INFO(("(no action taken)\n"));
+            }
+      }
+
+   if( TestErrorSwitch )
+      if( TestError( TheLink ) == 1 )
+         ABORT((SE, "transputer error flag has been set"));
+
+   signal(SIGINT, SIG_IGN);                    /*  dont want to be interrupted while closing  */
+   
+   if ( CloseLink( TheLink ) < 1 )
+      ABORT((SE, "unable to free transputer link"));
+
+   HostEnd();
+
+   return( ExitStatus );
+}
+
+
+
+/*
+ *   Eof
+ */

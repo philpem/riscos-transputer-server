@@ -1,0 +1,11 @@
+#define DWindow_None  -1
+#define DWindow_Read   0
+#define DWindow_Write  1
+#define DWindow_Key    2
+#define DWindow_Decode 3
+#define DWindow_Update 4
+#define DWindow_Redraw 5
+
+#ifdef DWINDOW
+extern void DWindow_Select(int);
+#endif

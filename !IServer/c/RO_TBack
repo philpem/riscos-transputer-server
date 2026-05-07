@@ -1,0 +1,53 @@
+/* --
+   -- Throwback generation for Desktop IServer
+   --
+   -- RO_TBack.c
+   --
+   -- Richard Crook
+   -- May 1992
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "os.h"
+
+#define Throwback_Start 0x42587
+#define Throwback_Send  0x42588
+#define Throwback_End   0x42589
+
+static char TBFilename[160] = "";
+
+enum { TBInactive, TBActive, TBFailed } State = TBInactive;
+
+void Throwback_Init(void)
+{
+}
+
+void Throwback_Exit(void)
+{
+  if (State == TBActive)
+  {
+    os_swi0(Throwback_End);
+  }
+}
+
+void Throwback(const int Severity, const char * Filename,
+               const int LineNo, const char * Message)
+{
+  if (State == TBInactive)
+  {
+    os_error * e;
+    os_swi1r(Throwback_Start | os_X, 0, (int*)&e);
+    State = (e == NULL) ? TBActive : TBFailed;
+  }
+  if (State == TBActive)
+  {
+    if (strcmp(TBFilename, Filename))
+    {
+      os_swi3(Throwback_Send | os_X, 0, 0, (int)Filename);
+      strcpy(TBFilename, Filename);
+    }
+    os_swi6(Throwback_Send | os_X, 1, 0, (int)Filename, LineNo, Severity, (int)Message);
+  }
+}

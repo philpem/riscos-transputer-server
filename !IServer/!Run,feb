@@ -1,0 +1,14 @@
+| > !IServer.!Run
+
+| Set WimpSlot
+| Required size currently unknown, but 512k works OK...
+
+WimpSlot -min 512k
+
+| Set IServer directory variable and load sprites
+
+Run <Obey$Dir>.!Boot
+
+| Run main program
+
+Run <IServer$Dir>.!RunImage %*0

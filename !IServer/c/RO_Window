@@ -1,0 +1,234 @@
+/* --
+   -- Window handling for Desktop IServer
+   --
+   -- RO_Window.c
+   --
+   -- Richard Crook
+   -- February 1992
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "inmos.h"
+#include "iserver.h"
+
+#include "baricon.h"
+#include "dbox.h"
+#include "event.h"
+#include "menu.h"
+#include "res.h"
+#include "resspr.h"
+#include "template.h"
+#include "wimp.h"
+#include "wimpt.h"
+#include "win.h"
+
+#include "DWindow.h"
+
+/*
+ *      WMenu points to the window menu structure
+ *      IMenu points to the icon bar menu
+ *
+ *      Window contains the (C library) window handle for the window
+ *      WindowOpen is set when the window is currently open
+ *      WindowActive is set when desktop (multi-tasking) mode is active
+ */
+
+PRIVATE menu   IMenu;
+PRIVATE menu   WMenu;
+
+PUBLIC  wimp_w Window;
+PUBLIC  BOOL   WindowOpen   = FALSE;
+PUBLIC  BOOL   WindowActive = FALSE;
+
+/*
+ *      IMenu_... define the positions of items within the icon bar menu
+ *      Info_...  defines icon numbers within the program info DBox
+ */
+
+#define IMenu_Text ">Info,Quit"
+#define IMenu_Info 1
+#define IMenu_Quit 2
+
+#define Info_Name       1
+#define Info_Purpose    2
+#define Info_Author     3
+#define Info_Version    4
+
+/*
+ *      External function definitions
+ */
+
+/* In RO_Screen.c */
+EXTERN  VOID   RedrawRegion(wimp_redrawstr *);
+EXTERN  VOID   UpdateCaret(void);
+
+/* In RO_Keybrd.c  */
+EXTERN  VOID   KeyPressed(int);
+
+/* Basic window operations ============================================================================== */
+
+/* Create window ---------------------------------------------------------------------------------------- */
+
+PRIVATE BOOL CreateWindow(void)
+{
+  wimp_wind * w;
+
+  /* Find template for window */
+  if ((w = template_syshandle("IServer")) == 0) return FALSE;
+  /* Create window */
+  return (wimpt_complain(wimp_create_wind(w, &Window)) == 0);
+}
+
+/* Open window ------------------------------------------------------------------------------------------ */
+
+PRIVATE VOID OpenWindow(wimp_openstr *o)
+{
+  wimpt_noerr(wimp_open_wind(o));
+}
+
+/* Close window ----------------------------------------------------------------------------------------- */
+
+PRIVATE VOID CloseWindow(void)
+{
+  wimpt_noerr(wimp_close_wind(Window));
+  WindowOpen = FALSE;
+}
+
+/* Redraw window (on request from Wimp) ----------------------------------------------------------------- */
+/*
+ * Force update of whole window, by calling Wimp_RedrawWindow and
+ * redrawing all visible rectangles in screen.
+ */
+
+PRIVATE VOID RedrawWindow(void)
+{
+  wimp_redrawstr r;
+  int            more;
+
+  /* Initiate redraw sequence */
+  r.w = Window;
+  wimpt_noerr(wimp_redraw_wind(&r, &more));
+
+  /* Redraw visible rectangles */
+  while (more)
+  {
+    RedrawRegion(&r);
+    wimpt_noerr(wimp_get_rectangle(&r, &more));
+  }
+}
+
+/* Event handlers ======================================================================================= */
+
+/* Window event handler --------------------------------------------------------------------------------- */
+
+PRIVATE VOID WindowHandler(wimp_eventstr* e, void* handle)
+{
+  UNUSED(handle);
+
+  switch (e->e)
+  {
+#ifdef DWINDOW
+    case wimp_EREDRAW:  DWindow_Select(DWindow_Redraw);
+                        RedrawWindow();                
+                        DWindow_Select(DWindow_None);   break;
+#else
+    case wimp_EREDRAW:  RedrawWindow();                 break;
+#endif
+    case wimp_EOPEN:    OpenWindow(&e->data.o);         break;
+    case wimp_ECLOSE:   CloseWindow();                  break;
+    case wimp_EKEY:     KeyPressed(e->data.key.chcode); break;
+    case wimp_EBUT:     if (e->data.but.m.bbits & 5) UpdateCaret(); break;
+  }
+}
+
+/* Program info box ------------------------------------------------------------------------------------- */
+
+PRIVATE VOID ProgramInfo(void)
+{
+  dbox d;
+  if ((d = dbox_new("ProgInfo")) != NULL)
+  {
+    dbox_setfield(d, Info_Version, VERSION_NAME);
+    dbox_show(d);
+    dbox_fillin(d);
+    dbox_dispose(&d);
+  }
+}
+
+/* Select event on icon bar ----------------------------------------------------------------------------- */
+
+PRIVATE VOID IconSelect(wimp_i icon)
+{
+  wimp_wstate w;
+
+  UNUSED(icon);
+
+  if (WindowOpen == FALSE)
+  {
+    if (wimpt_complain(wimp_get_wind_state(Window, &w)) == 0)
+    {
+      wimpt_noerr(wimp_open_wind(&w.o));
+      WindowOpen = TRUE;
+      UpdateCaret();
+    }
+  }
+}
+
+/* Menu event on icon bar ------------------------------------------------------------------------------- */
+
+PRIVATE VOID IconMenu(void* handle, char* selection)
+{
+  UNUSED(handle);
+  switch (selection[0])
+  {
+    case IMenu_Info:  ProgramInfo(); break;
+    case IMenu_Quit:  exit(0);
+  }
+}
+
+/* Initialisation and closedown ========================================================================= */
+
+PUBLIC VOID StartWindow(void)
+{
+  wimpt_init("IServer");
+  res_init  ("IServer");
+  resspr_init();
+  template_init();
+  dbox_init();
+
+#ifdef DWINDOW
+  { extern void CreateDWindow(void);
+    CreateDWindow();
+  }
+#endif
+
+  IMenu = menu_new("IServer", ">Info,Quit");
+  (void)baricon("!iserver", (int)resspr_area(), IconSelect);
+  (void)event_attachmenu(win_ICONBAR, IMenu, IconMenu, (void *)NULL);
+
+  if (CreateWindow() != TRUE) ABORT((SE, "Can't create window"));
+  win_register_event_handler(Window, WindowHandler, (void *)NULL);
+
+  WindowActive = TRUE;
+
+  IconSelect(0);
+}
+
+PUBLIC VOID EndWindow(void)
+{
+  CloseWindow();
+  WindowActive = FALSE;
+}
+
+/* Dummy procedure ====================================================================================== */
+
+PUBLIC VOID _Window_Dummy_Procedure(void)
+{
+  UNUSED(Copyright[0]);
+  UNUSED(WMenu);
+}
+
+/* End of file ========================================================================================== */

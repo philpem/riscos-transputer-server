@@ -1,0 +1,125 @@
+/* --
+   -- Keyboard emulation for Desktop IServer
+   --
+   -- RO_Keybrd.c
+   --
+   -- Richard Crook
+   -- February 1992
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "inmos.h"
+#include "iserver.h"
+
+#include "event.h"
+#include "os.h"
+#include "wimp.h"
+#include "wimpt.h"
+
+#include "DWindow.h"
+
+/*
+ *      KeyLength defines the length of the internal circular buffer
+ *
+ *      Keys[] is the circular buffer storing keypresses (as Wimp codes)
+ *      KeyCount counts the number of characters in the buffer
+ *      KeyPut and KeyGet are the insertion and removal indices
+ */
+
+#define KeyLength 256
+
+PRIVATE int Keys[KeyLength];
+PRIVATE int KeyCount = 0;
+PRIVATE int KeyPut   = 0;
+PRIVATE int KeyGet   = 0;
+
+#define ESC 27
+
+EXTERN BOOL WindowActive;
+
+/* Buffer insertion ===================================================================================== */
+
+/* Insert keypress into buffer -------------------------------------------------------------------------- */
+
+PUBLIC VOID KeyPressed(int key)
+{
+  /* Ignore all f12 variants */
+  if ((key & 0x1cf) == 0x1cc)
+  {
+    wimpt_noerr(wimp_processkey(key));
+  }
+  /* Ignore keypress if buffer full */
+  else if (KeyCount < KeyLength)
+  {
+    KeyCount++;
+    Keys[KeyPut++] = (key == 13 ? 10 : key);
+    if (KeyPut >= KeyLength) KeyPut = 0;
+  }
+}
+
+/* Buffer removal ======================================================================================= */
+
+/* Poll for key press ----------------------------------------------------------------------------------- */
+
+PUBLIC int PollKey(void)
+{
+  if (WindowActive)
+  {
+    if (KeyCount == 0) return -1;
+    else
+    {
+      int key;
+      key = Keys[KeyGet++];
+      if (key > 0x100)
+      {
+        Keys[--KeyGet] = key & 0xff;
+        return ESC;
+      }
+      if (KeyGet >= KeyLength)
+        KeyGet = 0;
+      --KeyCount;
+      return key;
+    }
+  }
+  else
+  {
+    int x = 0, y = 0;
+    (void)os_byte(0x81, &x, &y);
+    return (y == 0) ? x : -1;
+  }
+}
+
+/* Read key from keyboard ------------------------------------------------------------------------------- */
+
+PUBLIC BYTE GetAKey(void)
+{
+  if (WindowActive)
+  {
+#ifdef DWINDOW
+    DWindow_Select(DWindow_Key);
+#endif
+    while (KeyCount == 0) event_process();
+#ifdef DWINDOW
+    DWindow_Select(DWindow_None);
+#endif
+    return (BYTE)PollKey();
+  }
+  else
+  {
+    int key;
+    (void)os_swi1r(0x20004, 0, &key);
+    return key;
+  }
+}
+
+/* Dummy procedure ====================================================================================== */
+
+PUBLIC VOID _Keybrd_Dummy_Procedure(void)
+{
+  UNUSED(Copyright[0]);
+}
+
+/* End of file ========================================================================================== */

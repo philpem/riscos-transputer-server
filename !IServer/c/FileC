@@ -1,0 +1,794 @@
+
+/*
+ --   ---------------------------------------------------------------------------
+ --
+ --      ISERVER  -  INMOS standard file server
+ --
+ --      filec.c
+ --
+ --      Primary file operations
+ --
+ --      Copyright (c) INMOS Ltd., 1988.
+ --      All Rights Reserved.
+ --
+ --   ---------------------------------------------------------------------------
+*/
+
+
+
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+
+#ifdef VMS
+#include <unixio.h>
+#endif
+
+#include "inmos.h"
+#include "iserver.h"
+#include "pack.h"
+
+ 
+EXTERN BOOL CocoPops;                                                      /*  for DEBUG  */
+EXTERN BOOL VerboseSwitch;
+
+#ifndef RISCOS
+EXTERN int errno;
+#else
+#include <stdlib.h>
+#include "os.h"
+#include "swis.h"
+#define fclose wfclose
+#define fread  wfread
+#define fwrite wfwrite
+#define fflush wfflush
+#define fgets  wfgets
+#define fputs  wfputs
+#define fseek  wfseek
+#define ftell  wftell
+#undef  feof
+#define feof   wfeof
+#undef  ferror
+#define ferror wferror
+EXTERN int   wfclose(FILE *);
+EXTERN int   wfread (void *, int, int, FILE *);
+EXTERN int   wfwrite(void *, int, int, FILE *);
+EXTERN int   wfflush(FILE *);
+EXTERN char* wfgets (char *, int, FILE *);
+EXTERN int   wfputs (char *, FILE *);
+EXTERN int   wfseek (FILE *, int, int);
+EXTERN long  wftell (FILE *);
+EXTERN int   wfeof  (FILE *);
+EXTERN int   wferror(FILE *);
+EXTERN VOID TranslateFilename(BYTE *, BOOL);
+#endif
+
+EXTERN BYTE Tbuf[TRANSACTION_BUFFER_SIZE];
+
+PRIVATE BYTE DataBuffer[MAX_SLICE_LENGTH+1];
+PRIVATE int Size;
+
+
+
+
+/*
+ *   SpOpen
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpOpen(void)
+#else
+PUBLIC VOID SpOpen()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+   BYTE *Name, Type, Mode;
+
+   DEBUG(( "SP.OPEN" ));
+   INIT_BUFFERS;
+
+   Name = &DataBuffer[0];
+   GET_SLICE( Size, Name ); *(Name+Size)=0; DEBUG(( "\"%s\"", Name ));
+   
+   GET_BYTE( Type ); DEBUG(( "type %d", Type ));
+   GET_BYTE( Mode ); DEBUG(( "mode %d", Mode ));
+
+   if ( strlen( (char*)Name ) == 0 )
+      {
+         PUT_BYTE( SP_ERROR );
+         REPLY;
+      }
+   
+   if ( ( Type != 1 ) && ( Type !=2 ) )
+      {
+         PUT_BYTE( SP_ERROR );
+         REPLY;
+      }
+
+   if( ( Mode < 0 ) || ( Mode > 6 ))
+      {
+         PUT_BYTE( SP_ERROR );
+         REPLY;
+      }
+
+#ifdef SUN3                                                                /*  fopen file modes  */
+#define BINARY_1 "r"
+#define BINARY_2 "w"
+#define BINARY_3 "a"
+#define BINARY_4 "r+"
+#define BINARY_5 "w+"
+#define BINARY_6 "a+"
+#define TEXT_1 BINARY_1 
+#define TEXT_2 BINARY_2 
+#define TEXT_3 BINARY_3 
+#define TEXT_4 BINARY_4 
+#define TEXT_5 BINARY_5 
+#define TEXT_6 BINARY_6 
+#endif
+
+#ifdef MSC
+#define BINARY_1 "rb"
+#define BINARY_2 "wb"
+#define BINARY_3 "ab"
+#define BINARY_4 "r+b"
+#define BINARY_5 "w+b"
+#define BINARY_6 "a+b"
+#define TEXT_1 "rt"
+#define TEXT_2 "wt"
+#define TEXT_3 "at"
+#define TEXT_4 "r+t"
+#define TEXT_5 "w+t"
+#define TEXT_6 "a+t"
+#endif
+
+#ifdef HELIOS
+#define BINARY_1 "rb"
+#define BINARY_2 "wb"
+#define BINARY_3 "ab"
+#define BINARY_4 "r+b"
+#define BINARY_5 "w+b"
+#define BINARY_6 "a+b"
+#define TEXT_1 "r"
+#define TEXT_2 "w"
+#define TEXT_3 "a"
+#define TEXT_4 "r+"
+#define TEXT_5 "w+"
+#define TEXT_6 "a+"
+#endif
+
+#ifdef VMS
+#define BINARY_1 "rb"
+#define BINARY_2 "wb"
+#define BINARY_3 "ab"
+#define BINARY_4 "r+b"
+#define BINARY_5 "w+b"
+#define BINARY_6 "a+b"
+#define TEXT_1 "rt"
+#define TEXT_2 "wt"
+#define TEXT_3 "at"
+#define TEXT_4 "r+t"
+#define TEXT_5 "w+t"
+#define TEXT_6 "a+t"
+#endif
+
+#ifdef RISCOS
+#define BINARY_1 "rb"
+#define BINARY_2 "wb"
+#define BINARY_3 "ab"
+#define BINARY_4 "r+b"
+#define BINARY_5 "w+b"
+#define BINARY_6 "a+b"
+#define TEXT_1 "r"
+#define TEXT_2 "w"
+#define TEXT_3 "a"
+#define TEXT_4 "r+"
+#define TEXT_5 "w+"
+#define TEXT_6 "a+"
+#endif
+
+#ifdef RISCOS
+   TranslateFilename(Name, (Mode % 3) != 1);
+   DEBUG(("\"%s\"", Name));
+#endif
+
+   if( Type == 1 )
+      switch( Mode )
+         {
+            case 1 : Fd = fopen( (char*)Name, BINARY_1 ); break;
+            case 2 : Fd = fopen( (char*)Name, BINARY_2 ); break;
+            case 3 : Fd = fopen( (char*)Name, BINARY_3 ); break;
+            case 4 : Fd = fopen( (char*)Name, BINARY_4 ); break;
+            case 5 : Fd = fopen( (char*)Name, BINARY_5 ); break;
+            case 6 : Fd = fopen( (char*)Name, BINARY_6 ); break;
+         }
+   else
+      switch( Mode )
+         {
+            case 1 : Fd = fopen( (char*)Name, TEXT_1 ); break;
+            case 2 : Fd = fopen( (char*)Name, TEXT_2 ); break;
+            case 3 : Fd = fopen( (char*)Name, TEXT_3 ); break;
+            case 4 : Fd = fopen( (char*)Name, TEXT_4 ); break;
+            case 5 : Fd = fopen( (char*)Name, TEXT_5 ); break;
+            case 6 : Fd = fopen( (char*)Name, TEXT_6 ); break;
+         }
+
+   if( Fd == NULL )
+      {
+         PUT_BYTE( SP_ERROR );
+         REPLY;
+      }
+
+   PUT_BYTE( SP_SUCCESS );
+   PUT_FD( Fd )
+   DEBUG(( "fd %0X", (int)Fd ));
+   REPLY;
+}
+
+
+
+
+/*
+ *   SpClose
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpClose(void)
+#else
+PUBLIC VOID SpClose()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+
+   DEBUG(( "SP.CLOSE" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd ); DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin; break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+
+   if ( fclose( Fd ) == EOF )
+      {
+         PUT_BYTE( SP_ERROR );
+      }
+   else
+      {
+         PUT_BYTE( SP_SUCCESS );
+      }
+   REPLY;
+}
+
+
+
+
+/*
+ *   SpRead
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpRead(void)
+#else
+PUBLIC VOID SpRead()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+   BYTE *Data;
+   int Read;
+
+   DEBUG(( "SP.READ" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd ); DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin;
+#ifdef SUN3
+                  ResetTerminal();
+#endif
+                  break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+
+   GET_INT16( Size ); DEBUG(( "request %d", Size ));
+
+   Data = &DataBuffer[0];
+   Read = fread( Data, 1, Size, Fd );
+   DEBUG(( "read %d", Read ));
+   PUT_BYTE( SP_SUCCESS );
+   PUT_SLICE( Read, Data );
+
+   REPLY;   
+}
+
+
+
+/*
+ *   SpWrite
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpWrite(void)
+#else
+PUBLIC VOID SpWrite()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+   BYTE *Data;
+   int Written;
+         
+   DEBUG(( "SP.WRITE" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd ); DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin; break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+
+   Data = &DataBuffer[0];
+   GET_SLICE( Size, Data ); DEBUG(( "%d bytes", Size ));
+   
+#ifdef VMS
+                                 /*  VMS RMS generates a record for *each* item  */
+   if ( fwrite( Data, Size, 1, Fd ) != 1 )
+      Written = 0;
+   else
+      Written = Size;
+#else
+   Written = fwrite( Data, 1, Size, Fd );
+#endif
+   if ( Fd == stdout )
+      fflush( stdout );
+   DEBUG(( "wrote %d", Written ));
+   PUT_BYTE( SP_SUCCESS );
+   PUT_INT16( Written );
+   REPLY;      
+}
+
+
+
+
+/*
+ *   SpGets
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpGets(void)
+#else
+PUBLIC VOID SpGets()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+   BYTE *Data;
+
+   DEBUG(( "SP.GETS" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd ); DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin;
+#ifdef SUN3
+                  ResetTerminal();
+#endif
+                  break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+   GET_INT16( Size ); DEBUG(( "limit %d", Size ));
+
+   Data = &DataBuffer[0];
+   if ( fgets( (char*)Data, Size, Fd ) == NULL )
+      {
+         PUT_BYTE( SP_ERROR );
+      }
+   else
+      {
+         Size = strlen( (char*)Data );
+         if( *(Data+Size-1) == '\n')
+            {
+               *(Data+Size) = 0;
+               --Size;
+            }
+         DEBUG(( "got %d", Size ));
+         PUT_BYTE( SP_SUCCESS );
+         PUT_SLICE( Size, Data );
+      }
+   REPLY;
+}
+
+
+
+
+/*
+ *   SpPuts
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpPuts(void)
+#else
+PUBLIC VOID SpPuts()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+   BYTE *Data;
+
+   DEBUG(( "SP.PUTS" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd ); DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin; break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+
+   Data = &DataBuffer[0];
+   GET_SLICE( Size, Data ); DEBUG(( "%d bytes", Size ));
+
+   *(Data+Size)=0;
+   if ( fputs( (char*)Data, Fd ) == EOF )
+      {
+         PUT_BYTE( SP_ERROR );
+      }
+   else
+      {
+         if( fputs( "\n", Fd ) == EOF )
+            {
+               PUT_BYTE( SP_ERROR );
+            }
+         else
+            {
+               PUT_BYTE( SP_SUCCESS );
+            }
+      }
+   REPLY;
+}
+
+
+
+
+/*
+ *   SpFlush
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpFlush(void)
+#else
+PUBLIC VOID SpFlush()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+   
+   DEBUG(( "SP.FLUSH" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd ); DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin; break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+   if( fflush( Fd ) == EOF )
+      {
+         PUT_BYTE( SP_ERROR );
+      }
+   else
+      {
+         PUT_BYTE( SP_SUCCESS );
+      }
+   REPLY;
+}
+
+
+
+
+/*
+ *   SpSeek
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpSeek(void)
+#else
+PUBLIC VOID SpSeek()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+   INT32 Offset, Origin;
+   int origin;
+
+   DEBUG(( "SP.SEEK" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd );
+   DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin; break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+   GET_INT32( Offset ); DEBUG(( "offset %ld", Offset ));
+   GET_INT32( Origin ); DEBUG(( "origin %ld", Origin ));
+
+#ifdef SUN3
+   origin = (int)--Origin;
+#endif
+#ifdef VMS
+   origin = (int)--Origin;
+#endif
+/* Was: #ifdef MSC */
+#ifdef __STDC__
+   switch( (int)Origin )
+      {
+         case 1 : origin = SEEK_SET; break;
+         case 2 : origin = SEEK_CUR; break;
+         case 3 : origin = SEEK_END; break;
+      }
+#endif
+   if ( fseek( Fd, Offset, origin ) )
+      {
+         PUT_BYTE( SP_ERROR );
+      }
+   else
+      {
+         PUT_BYTE( SP_SUCCESS );
+      }
+   REPLY;
+   
+}
+
+
+
+
+/*
+ *   SpTell
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpTell(void)
+#else
+PUBLIC VOID SpTell()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+   long Position;
+
+   DEBUG(( "SP.TELL" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd );
+   DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin; break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+
+   Position = ftell( Fd );
+   if( Position == -1L )
+      {
+         PUT_BYTE( SP_ERROR );
+      }
+   else
+      {
+         PUT_BYTE( SP_SUCCESS );
+         PUT_INT32( Position );
+      }
+   REPLY;
+}
+
+
+
+
+/*
+ *   SpEof
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpEof(void)
+#else
+PUBLIC VOID SpEof()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+
+   DEBUG(( "SP.EOF" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd );
+   DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin; break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+   if( feof( Fd ) )
+      {
+         PUT_BYTE( SP_SUCCESS );
+      }
+   else
+      {
+         PUT_BYTE( SP_ERROR );
+      }
+   REPLY;
+}
+
+
+
+
+/*
+ *   SpError
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpError(void)
+#else
+PUBLIC VOID SpError()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   FILE *Fd;
+   INT32 Errno;
+   BYTE String[128];
+
+   DEBUG(( "SP.ERROR" ));
+   INIT_BUFFERS;
+
+   GET_FD( Fd );
+   DEBUG(( "fd %0X", (int)Fd ));
+   switch( (int)Fd )
+      {
+         case 0 : Fd = stdin; break;
+         case 1 : Fd = stdout; break;
+         case 2 : Fd = stderr; break;
+      }
+
+   if( ferror(Fd) )
+      {
+         PUT_BYTE( SP_SUCCESS );
+         Errno = errno;
+         DEBUG(( "errno %d", Errno ));
+         PUT_INT32( Errno );
+#ifdef SUN3
+         String[0] = 0;
+#else
+         strcpy( (char*)&String[0], strerror(errno));
+#endif
+         DEBUG(( "error \"%s\"", &String[0]));
+         Size = strlen((char*)&String[0]);
+         PUT_SLICE( Size, String[0] );
+         REPLY;
+      }
+   else
+      {
+         PUT_BYTE( SP_ERROR );
+         REPLY;
+      }
+}
+
+
+
+
+/*
+ *   SpRemove
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpRemove(void)
+#else
+PUBLIC VOID SpRemove()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   BYTE *Name;
+
+   DEBUG(( "SP.REMOVE" ));
+   INIT_BUFFERS;
+
+   Name = &DataBuffer[0];
+   GET_SLICE( Size, Name ); DataBuffer[Size] = 0; DEBUG(( "\"%s\"", Name ));
+   if ( *Name == 0 )
+      {
+         PUT_BYTE( SP_ERROR );
+      }
+   else
+      {
+#ifdef SUN3
+         if( unlink( Name ) )
+#else
+         if( remove( (char*)Name ) )
+#endif
+            {
+               PUT_BYTE( SP_ERROR );
+            }
+         else
+            {
+               PUT_BYTE( SP_SUCCESS );
+            }
+      }
+   REPLY;
+}
+
+
+
+/*
+ *   SpRename
+ */
+
+#ifdef __STDC__
+PUBLIC VOID SpRename(void)
+#else
+PUBLIC VOID SpRename()
+#endif
+{
+   BUFFER_DECLARATIONS;
+   BYTE *Oldname, *Newname;
+
+   DEBUG(( "SP.RENAME" ));
+   INIT_BUFFERS;
+   Oldname = &DataBuffer[0];
+   GET_SLICE( Size, Oldname ); *(Oldname+Size)=0; DEBUG(( "old \"%s\"", Oldname ));
+
+   Newname = Oldname+Size+1;
+   GET_SLICE( Size, Newname ); *(Newname+Size)=0; DEBUG(( "new \"%s\"", Newname ));
+
+   if ( *Oldname == 0 )
+      {
+         PUT_BYTE( SP_ERROR );
+      }
+   else
+      {
+         if ( *Newname == 0 )
+            {
+               PUT_BYTE( SP_ERROR );
+            }
+          else
+            {
+               if( rename( (char*)Oldname, (char*)Newname ) )
+                  {
+                     PUT_BYTE( SP_ERROR );
+                  }
+               else
+                  {
+                     PUT_BYTE( SP_SUCCESS );
+                  }
+            }
+      }
+   REPLY;
+
+}
+
+#ifdef RISCOS
+
+PUBLIC VOID _FileC_Dummy_Procedure(void)
+{
+  UNUSED(Copyright[0]);
+}
+
+#endif
+
+/*
+ *   Eof
+ */
+

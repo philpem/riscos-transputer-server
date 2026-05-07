@@ -1,0 +1,15 @@
+| > !IServer.!Boot
+
+Set Alias$Set If "<%%0>" = "" then %Set %*0
+
+Set IServer$Dir        <Obey$Dir>
+Set IServer$IBoardSize #200000
+Set IServer$IDebugSize #200000
+Set IServer$ITerm      <IServer$Dir>.ITerm
+Set IServer$FTerm      <IServer$Dir>.FTerm
+
+Unset Alias$Set
+
+Set Alias$IServer      /<IServer$Dir> %%*0
+
+Iconsprites <IServer$Dir>.!Sprites

@@ -1,0 +1,401 @@
+/* --
+   -- File access emulation for Desktop IServer
+   --
+   -- RO_Files.c
+   --
+   -- Richard Crook
+   -- February 1992
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+
+#include "os.h"
+#include "swis.h"
+
+#include "inmos.h"
+#include "iserver.h"
+
+typedef struct {
+  BOOL open : 1;
+  BOOL err  : 1;
+  BOOL eof  : 1;
+  BOOL in   : 1;
+} file;
+
+PRIVATE file si = { TRUE, FALSE, FALSE, TRUE  };
+PRIVATE file so = { TRUE, FALSE, FALSE, FALSE };
+PRIVATE file se = { TRUE, FALSE, FALSE, FALSE };
+
+EXTERN VOID wputc(BYTE);
+EXTERN VOID wputs(char *);
+EXTERN VOID wputn(char *, int);
+EXTERN BYTE GetAKey(void);
+EXTERN VOID Throwback(const int, const char *, const int, const char *);
+
+EXTERN BOOL WindowActive;
+EXTERN BOOL ThrowbackSwitch;
+
+/* Utility routines ===================================================================================== */
+
+/*
+ *   RISC OS support functions
+ */
+
+PRIVATE BOOL Exists(BYTE * name)
+{
+  int type, dummy;
+  if (os_swi2r(OS_File + XOS_Bit, 17, (int)name, &type, &dummy) != NULL)
+       return FALSE;
+  else return type != 0;
+}
+  
+PRIVATE os_error* CDir(BYTE * name)
+{
+  return os_swi6(OS_File + XOS_Bit, 8, (int)name, 0, 0, 0, 0);
+}
+
+/* Translate file name ---------------------------------------------------------------------------------- */
+
+PUBLIC VOID TranslateFilename(BYTE* Name, BOOL CreateDir)
+
+/* Given the Acorn file naming conventions, we have to do some
+   name translation on fopen() to make the tools behave sensibly.
+   Rule: If there is a dot in the name, and the last component is
+         three characters or less, then swap the last two components */
+{
+   BYTE   Buffer[MAX_SLICE_LENGTH+1]; /* [sizeof(DataBuffer)] in Files.c */
+   BYTE * DotPos = (BYTE*)0;
+   BYTE * NamPos = (BYTE*)0;
+   BYTE * NamPtr = Name;
+   BYTE * BufPtr = Buffer;
+   BYTE * t;
+
+#if 0
+
+   This turns out not to be the right way to do this...
+
+   /* If DesktopSwitch is set (equivalent to -desktop in DDE tools)   */
+   /* then check for @. as a prefix. If it's there, translate it into */
+   /* the current value of Prefix$Dir. Note that this results in      */
+   /* string expansion, so overflow is possible.                      */
+
+   if (DesktopSwitch && !memcmp(Name, "@.", 2))
+   {
+     char       Variable[] = "Prefix$Dir";
+     os_error * Error;
+     int        Count;
+     int        Dummy;
+
+     os_swi6r(OS_ReadVarVal | os_X,
+             (int)Variable, (int)Buffer, sizeof(Buffer)-strlen((char*)Name)-1, 0, 3, 0,
+             (int*)&Error,  &Dummy, &Count, &Dummy, &Dummy, &Dummy);
+     if ((char*)Error == Variable)
+     {
+       BufPtr = Buffer + Count;
+       if (Count != 0) *BufPtr++ = (BYTE)'.';
+       NamPtr += 2;
+     }
+   }
+
+#endif
+
+   /* Locate the last dot or colon in the string */
+   for (t = NamPtr; *t != (BYTE)0; t++)
+     if (*t == (BYTE)'.' || *t == (BYTE)':')
+       NamPos = DotPos, DotPos = t;
+   if (NamPos == (BYTE*)0) NamPos = NamPtr; else NamPos++;
+
+   /* If there was a dot or colon in the string, DotPos points to the */
+   /* last one. NamPos points to the previous one, if it was found    */
+   /*                                                                 */
+   /* If there was no separator      (DotPos  == 0)                   */
+   /* or if the last one was a colon (*DotPos == ':')                 */
+   /* or if the last component is less than three characters          */
+   /* or if the previous component is $., &., \., or @.               */
+   /* DON'T translate the name.                                       */
+   /*                                                                 */
+   /* Otherwise, swap the last two components. NamPos points to the   */
+   /* start of the penultimate component of the name                  */
+
+   if ( DotPos   != (BYTE*)0 &&
+       *DotPos++ != (BYTE)':' &&
+        ( *(NamPos+1) != '.' ||
+          strchr("$&@\\", (char)*NamPos) == NULL ) &&
+        strlen((char*)DotPos) <= 3)
+   {
+     for (t = NamPtr; t < NamPos; *BufPtr++ = *t++) ;
+     for (t = DotPos; *t != 0; *BufPtr++ = *t++) ;
+     /* At this point, the buffer contains the name of the directory   */
+     /* in which the file will be opened. Check if it exists, and if   */
+     /* it doesn't, and the file mode is create, then try to create it */
+     *BufPtr = (BYTE)0;
+     if (Exists(Buffer) == FALSE && CreateDir) (void)CDir(Buffer);
+     *BufPtr++ = (BYTE)'.';
+     for (t = NamPos; *t != (BYTE)'.'; *BufPtr++ = *t++) ;
+     *BufPtr = (BYTE)0;
+     strcpy((char*)Name, (char*)Buffer);
+   }
+}
+
+/* Standard I/O emulations ============================================================================== */
+
+/* Check file descriptor for special case --------------------------------------------------------------- */
+
+PRIVATE file * CheckFD(FILE *fd)
+{
+  return (fd == stdin)  ? &si :
+         (fd == stdout) ? &so :
+         (fd == stderr) ? &se :
+         (file *)NULL;
+}
+
+#define CHECK_FD file * f = CheckFD(fd);
+#define FNULL ((file*)NULL)
+
+/* fclose() --------------------------------------------------------------------------------------------- */
+
+PRIVATE int wclose(file * f)
+{
+  register BOOL t = f->open;
+  f->open = FALSE;
+  return (t ? 0 : EOF);
+}
+
+PUBLIC int wfclose(FILE * fd)
+{
+  CHECK_FD;
+
+  if (WindowActive && f != FNULL) return wclose(f);
+  else                                     return fclose(fd);
+}
+
+/* fread() ---------------------------------------------------------------------------------------------- */
+
+PUBLIC int wfread(void * ptr, size_t size, size_t nmemb, FILE* fd)
+{
+  CHECK_FD;
+
+  if (WindowActive && f != FNULL)
+  {
+    int i, j;
+    BYTE *t = (BYTE*)ptr;
+
+    if (f->in == FALSE)
+    {
+      f->err = TRUE;
+      errno  = EDOM;
+      return 0;
+    }
+    for (i = 0; i < nmemb; i++) /* foreach nmemb */
+      for (j = 0; j < size; j++) /* foreach byte */
+        *t++ = GetAKey();
+    return nmemb;
+  }
+  else return fread(ptr, size, nmemb, fd);
+}
+
+/* fwrite() --------------------------------------------------------------------------------------------- */
+
+PRIVATE int CheckError(void * ptr)
+{
+  static char *ErrorTypes[] = { "Warning-", "Error-", "Fatal-" };
+  static char  ErrorSizes[] = {     8,         6,        6     };
+  int i;
+  for (i = (sizeof(ErrorTypes)/sizeof(char *)) - 1 ; i >= 0 ; --i)
+  {
+    if (!memcmp((void *)ErrorTypes[i], ptr, ErrorSizes[i])) break;
+  }
+  return i;
+}
+
+PUBLIC int wfwrite(void * ptr, size_t size, size_t nmemb, FILE* fd)
+{
+  CHECK_FD;
+
+  /**************************************************************************/
+  /*                                                                        */
+  /* REC 12/05/92                                                           */
+  /*                                                                        */
+  /* If the ThrowbackSwitch is on, then parse lines sent to StdOut, in case */
+  /* they are standard Inmos format error lines. These consist of:          */
+  /*                                                                        */
+  /*   {Severity}-{ProgramName}-{Filename}[({Line})]- {Error message}       */
+  /*                                                                        */
+  /* where {Severity} is one of Fatal, Error, and Warning                   */
+  /*                                                                        */
+  /**************************************************************************/
+
+  if (ThrowbackSwitch && f == &se)
+  {
+    int Severity = CheckError(ptr);
+    if (Severity != -1) /* Error line detected */
+    {
+      int  NChars;
+      char NextChar;
+      int  LineNo        = 0;
+      char FileName[160] = "";
+      char Message[160]  = "";
+      char *Ptr          = (char*)ptr;
+
+      if ( (sscanf(Ptr, "  %*[^-\n]   -  %*[^-\n]   - %[^-(\n]      %c         %n",
+                        /* Severity */ /* Program */  FileName , &NextChar , &NChars) == 2)
+        && ( ((NextChar == '(') &&
+              (sscanf(Ptr+NChars, " %u   )-  %[^\n]",
+                                  &LineNo , Message) == 2))
+          || ((NextChar == '-') &&
+              (sscanf(Ptr+NChars, "%[^\n]", Message) == 1)) ) )
+      {
+        TranslateFilename((BYTE *)FileName, FALSE);
+        Throwback(Severity, FileName, LineNo, Message);
+      }
+    }    
+  }
+
+  if (WindowActive && f != FNULL)
+  {
+/*    int i, j;                     */
+    BYTE *t = (BYTE*)ptr;
+
+    if (f->in == TRUE)
+    {
+      f->err = TRUE;
+      errno  = EDOM;
+      return 0;
+    }
+/*    for (i = 0; i < nmemb; i++)   */
+/*      for (j = 0; j < size; j++)  */
+/*        wputc(*t++);              */
+/*    return nmemb;                 */
+    wputn((char *)t, nmemb*size);
+    return nmemb;
+  }
+  else return fwrite(ptr, size, nmemb, fd);
+}
+
+/* fflush() --------------------------------------------------------------------------------------------- */
+
+PUBLIC int wfflush(FILE* fd)
+{
+  EXTERN void wflush(void);
+  CHECK_FD;
+
+  if (WindowActive)
+  {
+    if (f->in == FALSE) wflush();
+    return 0;
+  }
+  else return fflush(fd);
+}
+
+/* fgets() ---------------------------------------------------------------------------------------------- */
+
+PUBLIC char * wfgets(char* ptr, int len, FILE* fd)
+{
+  int   i;
+  char *t = ptr;
+
+  CHECK_FD;
+
+  if (WindowActive && f != FNULL)
+  {
+    if (f->in == FALSE)
+    {
+      f->err = TRUE;
+      errno  = EDOM;
+      return NULL;
+    }
+    for (i = 0; i < len - 1; i++)
+      if ((*t++ = GetAKey()) == '\n') break;
+    *t = '\0';
+    return ptr;
+  }
+  else return fgets(ptr, len, fd);
+}
+
+/* fputs() ---------------------------------------------------------------------------------------------- */
+
+PUBLIC int wfputs(char* ptr, FILE* fd)
+{
+  CHECK_FD;
+
+  if (WindowActive && f != FNULL)
+  {
+    if (f->in == TRUE)
+    {
+      f->err = TRUE;
+      errno  = EDOM;
+      return EOF;
+    }
+#if 0
+    while (*ptr) wputc(*ptr++);
+#else
+    wputs(ptr);
+#endif
+    return 0;
+  }
+  else return fputs(ptr, fd);
+}
+
+/* fseek() ---------------------------------------------------------------------------------------------- */
+
+PUBLIC int wfseek(FILE* fd, int offset, int whence)
+{
+  CHECK_FD;
+
+  if (WindowActive && f != FNULL)
+  {
+    return EOF;
+  }
+  else return fseek(fd, offset, whence);
+}
+
+/* ftell() ---------------------------------------------------------------------------------------------- */
+
+PUBLIC long int wftell(FILE* fd)
+{
+  CHECK_FD;
+
+  if (WindowActive && f != FNULL)
+  {
+    return 0L;
+  }
+  else return ftell(fd);
+}
+
+/* feof() ----------------------------------------------------------------------------------------------- */
+
+PUBLIC int wfeof(FILE* fd)
+{
+  CHECK_FD;
+
+  if (WindowActive && f != FNULL)
+  {
+    return (int)f->eof;
+  }
+  else return feof(fd);
+}
+
+/* ferror() --------------------------------------------------------------------------------------------- */
+
+PUBLIC int wferror(FILE* fd)
+{
+  CHECK_FD;
+
+  if (WindowActive && f != FNULL)
+  {
+    return (int)f->err;
+  }
+  else return ferror(fd);
+}
+
+/* Dummy procedure ====================================================================================== */
+
+PUBLIC VOID _Files_Dummy_Procedure(void)
+{
+  UNUSED(Copyright[0]);
+}
+
+/* End of file ========================================================================================== */
