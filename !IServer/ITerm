@@ -13,7 +13,7 @@ screen section
 2:27,6.                 cursor down
 3:8.                    cursor left
 4:9.                    cursor right
-5:31,-11,0,-21,0.       goto xy
+5:31,-11,0,-21,0,0,0.   goto xy
 6:27,0.                 insert char
 7:27,1.                 delete char
 8:27,4.                 delete to EOL
