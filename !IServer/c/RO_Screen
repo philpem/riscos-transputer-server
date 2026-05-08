@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 
 #include "inmos.h"
@@ -21,6 +22,30 @@
 #include "swis.h"
 
 #include "DWindow.h"
+
+/* Debug logging =========================================================================================
+ * Writes a per-byte trace of _wputc()'s behaviour to <IServer$Dir>.RODebug so we
+ * can see exactly how the window emulator handles each byte TDS sends.  Active
+ * whenever the window is in use; remove the calls once diagnosis is finished.
+ */
+
+PRIVATE FILE *DebugLog = NULL;
+
+PUBLIC VOID dlog(const char *format, ...)
+{
+  va_list ap;
+  if (DebugLog == NULL)
+  {
+    DebugLog = fopen("<IServer$Dir>.RODebug", "w");
+    if (DebugLog != NULL)
+      fputs("=== RO_Screen / RO_Files debug log ===\n", DebugLog);
+  }
+  if (DebugLog == NULL) return;
+  va_start(ap, format);
+  vfprintf(DebugLog, format, ap);
+  va_end(ap);
+  fflush(DebugLog);
+}
 
 /*
  *      ScreenX and ScreenY define the size of the screen
@@ -403,7 +428,7 @@ PUBLIC VOID wflush(void)
 {
   if (UpdateX != -1)
   {
-/*    werr(FALSE, "wflush: UpdateX = %d CursorXY = %d,%d", UpdateX, CursorX, CursorY); */
+    dlog("    wflush: row=%d cols %d..%d\n", CursorY, UpdateX, CursorX-1);
     UpdateRegion(UpdateX, CursorY, CursorX-1, CursorY);
     UpdateX = -1;
   }
@@ -411,19 +436,34 @@ PUBLIC VOID wflush(void)
 
 PRIVATE VOID _wputc(BYTE c)
 {
+  dlog("_wputc(0x%02X%s%c%s) Q={size=%d,ptr=%d,[0]=0x%02X,[1]=0x%02X,[2]=0x%02X} cur=(%d,%d) Upd=%d\n",
+       c,
+       (c >= SPACE && c < DELETE) ? " '" : "",
+       (c >= SPACE && c < DELETE) ? c    : ' ',
+       (c >= SPACE && c < DELETE) ? "'"  : "  ",
+       QSize, QPtr, Queue[0], Queue[1], Queue[2],
+       CursorX, CursorY, UpdateX);
+
   /* Pre-filter parameter characters */
   if (QSize != 0)
   {
     Queue[QPtr++] = c;
-    if (QPtr <= QSize) return;
+    if (QPtr <= QSize)
+    {
+      dlog("    queued as Q[%d]=0x%02X (need %d total)\n", QPtr-1, c, QSize);
+      return;
+    }
     c = Queue[0];
     QSize = QPtr = 0;
+    dlog("    dispatch lead 0x%02X, params [0x%02X,0x%02X,0x%02X]\n",
+         c, Queue[1], Queue[2], Queue[3]);
   }
   else if (c < SPACE)
   {
     if (QSize = QLength[(int)c], QSize != 0)
     {
       Queue[QPtr++] = c;
+      dlog("    start queue: Q[0]=0x%02X expecting %d param bytes\n", c, QSize);
       return;
     }
   }
@@ -431,7 +471,8 @@ PRIVATE VOID _wputc(BYTE c)
   /* Discard whole sequence if output disabled */
   if (OutputDisable)
   {
-    if (c == 6) OutputDisable = FALSE;
+    if (c == 6) { OutputDisable = FALSE; dlog("    VDU 6: re-enable output\n"); }
+    else dlog("    discard 0x%02X (output disabled)\n", c);
     return;
   }
 
@@ -441,6 +482,7 @@ PRIVATE VOID _wputc(BYTE c)
     /* Move cursor to start of line if currently after end of line */
     if (CursorX == ScreenX)
     {
+      dlog("    wrap: CursorX==%d, advancing to next row\n", ScreenX);
       if (++CursorY == ScreenY)
       {
         ScrollUp(0, --CursorY);
@@ -451,13 +493,13 @@ PRIVATE VOID _wputc(BYTE c)
     }
     /* Insert character into screen map, and update window */
     Screen[CursorY][CursorX] = c;
-    /* UpdateRegion(CursorX, CursorY, CursorX, CursorY); */
-    if (UpdateX == -1) /*{ werr(FALSE, "_wputc @ %d, %d", CursorX, (int)c);*/ UpdateX = CursorX;/* }*/
+    if (UpdateX == -1) UpdateX = CursorX;
+    dlog("    print '%c' at (%d,%d), UpdateX=%d\n", c, CursorX, CursorY, UpdateX);
     CursorH(+1);
   }
 
   /* Process control sequences */
-  else { /*werr(FALSE, "_wputc control: %d", (int)c);*/ switch (c)
+  else { dlog("    control 0x%02X dispatch\n", c); switch (c)
   {
     /* Null code */
     case 0: break;
@@ -505,12 +547,18 @@ PRIVATE VOID _wputc(BYTE c)
     /* Home text cursor */
     case 30: wflush(); CursorXY(0,0); break;
     /* Position text cursor */
-    case 31: wflush(); CursorXY((int)Queue[1], (int)Queue[2]); break;
+    case 31: wflush();
+             dlog("      VDU 31 -> CursorXY(%d,%d)\n", (int)Queue[1], (int)Queue[2]);
+             CursorXY((int)Queue[1], (int)Queue[2]);
+             dlog("      cursor now (%d,%d)\n", CursorX, CursorY);
+             break;
     /* Delete */
     case 127: DeleteBack(); break;
 
     /* Use of VDU code 27 (defined as no operation) is to emulate extra functions */
-    case 27: wflush(); switch(Queue[1])
+    case 27: wflush();
+             dlog("      ESC sub=%d\n", (int)Queue[1]);
+             switch(Queue[1])
       {
         case 0: InsertChar(SPACE); break;
         case 1: DeleteChar();      break;
@@ -519,9 +567,12 @@ PRIVATE VOID _wputc(BYTE c)
         case 4: ClearToEOL(CursorY, CursorX); break;
         case 5: ClearToEOS();                 break;
         case 6: CursorV(+1);       break;
+        default: dlog("      ESC sub %d: NOT IMPLEMENTED\n", (int)Queue[1]); break;
       }
+      dlog("      cursor now (%d,%d)\n", CursorX, CursorY);
       break;
-  } }
+    default: dlog("      VDU %d: NOT IMPLEMENTED\n", (int)c); break;
+  } dlog("    after control, cursor (%d,%d)\n", CursorX, CursorY); }
 }
 
 PUBLIC VOID wputc(BYTE c)

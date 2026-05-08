@@ -34,9 +34,27 @@ EXTERN VOID wputs(char *);
 EXTERN VOID wputn(char *, int);
 EXTERN BYTE GetAKey(void);
 EXTERN VOID Throwback(const int, const char *, const int, const char *);
+EXTERN VOID dlog(const char *, ...);
 
 EXTERN BOOL WindowActive;
 EXTERN BOOL ThrowbackSwitch;
+
+/* Hex-dump helper for debug log: emits "01 02 41 'A' ..." style for the first
+ * `count` bytes (capped at 64 so the log stays readable).
+ */
+PRIVATE VOID dlog_hexdump(const char *prefix, const BYTE *data, int count)
+{
+  int i, n = count > 64 ? 64 : count;
+  dlog("%s len=%d:", prefix, count);
+  for (i = 0; i < n; i++)
+  {
+    BYTE b = data[i];
+    if (b >= 32 && b < 127) dlog(" %02X'%c'", b, b);
+    else                    dlog(" %02X   ", b);
+  }
+  if (count > n) dlog(" ...(+%d more)", count - n);
+  dlog("\n");
+}
 
 /* Utility routines ===================================================================================== */
 
@@ -296,6 +314,7 @@ PUBLIC int wfwrite(void * ptr, size_t size, size_t nmemb, FILE* fd)
 /*      for (j = 0; j < size; j++)  */
 /*        wputc(*t++);              */
 /*    return nmemb;                 */
+    dlog_hexdump(f == &so ? "wfwrite stdout" : "wfwrite stderr", t, nmemb*size);
     wputn((char *)t, nmemb*size);
     return nmemb;
   }
@@ -359,6 +378,8 @@ PUBLIC int wfputs(char* ptr, FILE* fd)
 #if 0
     while (*ptr) wputc(*ptr++);
 #else
+    dlog_hexdump(f == &so ? "wfputs stdout" : "wfputs stderr",
+                 (const BYTE *)ptr, (int)strlen(ptr));
     wputs(ptr);
 #endif
     return 0;
