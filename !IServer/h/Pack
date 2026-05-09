@@ -121,7 +121,7 @@
 #ifdef BIG_ENDIAN
 #define GET_INT16(x) { x = *InBuf++; x += 256*(*InBuf++); }
 #else
-#define GET_INT16(x) {BYTE *c; c=(BYTE *)&x; *c++ = *InBuf++; *c = *InBuf++; }
+#define GET_INT16(x) {BYTE *c; x=0; c=(BYTE *)&x; *c++ = *InBuf++; *c = *InBuf++; }
 #endif
 
 
