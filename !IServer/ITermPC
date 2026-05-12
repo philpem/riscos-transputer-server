@@ -1,0 +1,144 @@
+#
+#  RISC OS ITERM data file
+#  Derived from the Inmos PC ANSI ITerm.
+#
+#  Phil Pemberton, 2026.
+#
+
+host section
+1:2.       version
+2:80,25.   screen size
+end of host section
+
+# Screen control characters (RISC OS VDU sequences)
+
+screen section
+1:11.                   cursor up
+2:27,6.                 cursor down
+3:8.                    cursor left
+4:9.                    cursor right
+5:31,-11,0,-21,0,0,0.   goto xy
+6:27,0.                 insert char
+7:27,1.                 delete char
+8:27,4.                 delete to EOL
+9:27,5.                 delete to EOS
+10:27,2.                insert line
+11:27,3.                delete line
+12:7.                   ring bell
+13:12.                  home and clear screen
+end of screen section
+
+# Keyboard encoding produced by RO_Keybrd.c:
+#   ASCII (0-127):  single byte    (Return is queued as 10, not 13)
+#   Special key:    27, <hi>
+#   Bare Escape:    27, 27
+#   Alt + ASCII:    27, 27, <byte>
+#   Alt + special:  27, 27, 27, <hi>
+#
+# ASCII keys of note: 8 BS, 9 TAB, 10 Return, 27 ESC, 30 HOME, 127 DEL
+
+keyboard
+# --- cursor / editing keys ---
+6:27,143.           up                  Up
+7:27,142.           down                Down
+8:27,140.           left                Left
+9:27,141.           right               Right
+10:8.               del.chl             Backspace
+11:127.             del.chr             Delete
+
+# --- line / word editing ---
+12:27,27,27,135.    del.line            Alt+F7
+12:25.              del.line            Ctrl+Y
+13:27,27,27,136.    undel.line          Alt+F8
+14:27,135.          sol                 F7
+15:27,136.          eol                 F8
+
+# --- file / buffer manipulation ---
+16:27,131.          move                F3
+17:27,132.          copy                F4
+18:27,137.          line.up             F9
+19:27,138.          line.down           F10
+20:27,27,27,137.    page.up             Alt+F9
+21:27,27,27,138.    page.down           Alt+F10
+
+# --- folding (PC NumPad keys mapped to RISC OS cursor cluster) ---
+22:27,205.          create.fold         Insert
+23:27,191.          remove.fold         CS-Up         (= Ctrl+PgUp on PC)
+23:18.              remove.fold         Ctrl+R
+24:27,139.          open.fold           Copy          (= End on PC)
+25:16.              close.fold          Ctrl+P        [substitute - no PC binding]
+26:30.              enter.fold          Home
+27:27,159.          exit.fold           Sh-Up         (RISC OS PgUp)
+28:27,27,27,27.     refresh             Esc Esc       [single Esc is the Alt prefix]
+29:27,146.          file.fold           Sh-F2
+
+# --- misc ---
+31:27,171.          finish              Ct-Copy       (= Ctrl+End on PC)
+31:24.              finish              Ctrl+X
+32:27,27,27,129.    edit.params         Alt+F1
+33:27,130.          fold.info           F2
+34:27,129.          help                F1
+36:27,133.          get.code            F5
+37:27,164.          save.macro          Ct-F4
+37:23.              save.macro          Ctrl+W
+38:27,163.          get.macro           Ct-F3
+38:22.              get.macro           Ctrl+V        [PC ITerm '16' looks like a typo for 22]
+39:27,134.          run                 F6
+
+# --- tools (Alt+digit) ---
+40:27,27,48.        tool 0              Alt+0
+41:27,27,49.        tool 1              Alt+1
+42:27,27,50.        tool 2              Alt+2
+43:27,27,51.        tool 3              Alt+3
+44:27,27,52.        tool 4              Alt+4
+45:27,27,53.        tool 5              Alt+5
+46:27,27,54.        tool 6              Alt+6
+47:27,27,55.        tool 7              Alt+7
+48:27,27,56.        tool 8              Alt+8
+49:27,27,57.        tool 9              Alt+9
+
+# --- word movement / deletion ---
+50:27,151.          word.left           Sh-F7
+50:6.               word.left           Ctrl+F
+50:27,156.          word.left           Sh-Left       [PC Ctrl+Left -> RISC OS Sh-Left idiom]
+51:27,152.          word.right          Sh-F8
+51:7.               word.right          Ctrl+G
+51:27,157.          word.right          Sh-Right
+52:27,167.          del.wordl           Ct-F7
+52:11.              del.wordl           Ctrl+K
+53:27,168.          del.wordr           Ct-F8
+53:12.              del.wordr           Ctrl+L
+54:5.               delto.eol           Ctrl+E
+
+# --- fold navigation / utilities ---
+55:27,153.          topof.fold          Sh-F9
+55:20.              topof.fold          Ctrl+T
+56:27,154.          bottomof.fold       Sh-F10
+56:2.               bottomof.fold       Ctrl+B
+57:9.               select.param        Tab
+58:27,27,27,130.    code.info           Alt+F2
+59:27,27,27,131.    pick                Alt+F3
+60:27,27,27,132.    copy.pick           Alt+F4
+61:27,147.          put                 Sh-F3
+61:21.              put                 Ctrl+U
+62:27,27,27,133.    next.util           Alt+F5
+63:27,165.          clear.util          Ct-F5
+64:27,149.          autoload            Sh-F5
+65:27,27,27,134.    next.exe            Alt+F6
+66:27,166.          clear.exe           Ct-F6
+67:27,150.          clear.all           Sh-F6
+
+# --- browsing, suspend, macros ---
+68:27,145.          browse              Sh-F1
+68:15.              browse              Ctrl+O
+69:26.              suspend.tds         Ctrl+Z
+70:27,169.          define.macro        Ct-F9
+70:4.               define.macro        Ctrl+D
+71:27,170.          call.macro          Ct-F10
+# 71:10 (Ctrl+J) alternate dropped: collides with Return (CR->LF in QueueByte).
+
+72:27,27,45.        make.comment        Alt+-
+
+end keyboard
+
+# THAT'S ALL FOLKS
