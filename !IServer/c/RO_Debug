@@ -25,13 +25,35 @@ EXTERN int  CloseLink(int);
 
 /* Generate debug output ================================================================================ */
 
+PRIVATE FILE *DebugLog = NULL;
+
+PRIVATE VOID _dlog(const char *format, ...)
+{
+  va_list ap;
+  if (DebugLog == NULL)
+  {
+    DebugLog = fopen("<IServer$Dir>.^.ISvrDebug", "w");
+    if (DebugLog != NULL)
+      fputs("=== IServer debug log ===\n", DebugLog);
+  }
+  if (DebugLog == NULL) return;
+  va_start(ap, format);
+  vfprintf(DebugLog, format, ap);
+  va_end(ap);
+  fflush(DebugLog);
+}
+
+/* Generate debug output ================================================================================ */
+
 PUBLIC VOID w_debug(const char * format, ...)
 {
   va_list ap;
   va_start(ap, format);
   (void)vsprintf(Debug_Buffer, format, ap);
   va_end(ap);
-  if (WindowActive) werr(FALSE, Debug_Buffer);
+  if (WindowActive) {
+    _dlog("(%s)\n", Debug_Buffer);
+  }
   else
   {
     printf("(%s)", Debug_Buffer);
@@ -47,7 +69,10 @@ PUBLIC VOID w_info(const char * format, ...)
   va_start(ap, format);
   (void)vsprintf(Debug_Buffer, format, ap);
   va_end(ap);
-  if (WindowActive) werr(FALSE, Debug_Buffer);
+  if (WindowActive) {
+    _dlog("%s\n", Debug_Buffer);
+    werr(FALSE, Debug_Buffer);
+  }
   else
   {
     printf("%s", Debug_Buffer);
@@ -64,9 +89,9 @@ PUBLIC VOID w_abort(FILE * f, const char * format, ...)
   (void)vsprintf(Debug_Buffer, format, ap);
   va_end(ap);
   if (TheLink != -1) (void)CloseLink(TheLink);
-  if (WindowActive)
-  {
-    werr(TRUE, Debug_Buffer);
+  if (WindowActive) {
+    _dlog("\nError - %s - %s.\n", PROGRAM_NAME, Debug_Buffer);
+    werr(FALSE, Debug_Buffer);
   }
   else
   {
