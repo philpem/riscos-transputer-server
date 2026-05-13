@@ -51,7 +51,7 @@ PRIVATE BOOL Exists(BYTE * name)
        return FALSE;
   else return type != 0;
 }
-  
+
 PRIVATE os_error* CDir(BYTE * name)
 {
   return os_swi6(OS_File + XOS_Bit, 8, (int)name, 0, 0, 0, 0);
@@ -101,6 +101,12 @@ PUBLIC VOID TranslateFilename(BYTE* Name, BOOL CreateDir)
    }
 
 #endif
+
+   /* Replace any backslashes (DOS) with periods (RISC OS) */
+   /* 3L Parallel C, I'm looking at you here. */
+   for (t = NamPtr; *t != (BYTE)0; t++)
+     if (*t == (BYTE)'\\')
+       *t = '.';
 
    /* Locate the last dot or colon in the string */
    for (t = NamPtr; *t != (BYTE)0; t++)
