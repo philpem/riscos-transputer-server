@@ -9,7 +9,7 @@
 * Revision History in reverse order:
 *
 *  Rev 001  IAY  unknown date  - Suppress ``booting'' message
-*                             - Change version string  
+*                             - Change version string
 *
 *  Rev 002  JF   12-Apr-1989  - Support for Record-Level I/O
 *                             - Change version string
@@ -79,6 +79,9 @@ extern long  wftell (FILE *);
 extern int   wfeof  (FILE *);
 extern int   wferror(FILE *);
 extern void  TranslateFilename(BYTE *, BOOL);
+#ifdef RISCOS
+extern char* RO_Getenv(const char *);
+#endif
 extern BYTE  GetAKey(void);
 extern int   PollKey(void);
 extern int   TheLink;
@@ -148,7 +151,7 @@ int tcomread(char *, int);
 static char *open_types [MAX_OPEN_MODE+1]
   [MAX_EXIST_MODE+1][MAX_ACCESS_METHOD+1] =
 {
-{{"rb", "rt", "rb", "rb", "rb", "rb"}, {"rb", "rt", "rb", "rb", "rb", "rb"}}, 
+{{"rb", "rt", "rb", "rb", "rb", "rb"}, {"rb", "rt", "rb", "rb", "rb", "rb"}},
 {{"r+b","r+t","r+b","r+b","r+b","r+b"},{"wb", "wt", "wb", "wb", "wb", "wb"}},
 {{"r+b","r+t","r+b","r+b","r+b","r+b"},{"w+b","w+t","w+b","w+b","w+b","w+b"}}
 };
@@ -337,8 +340,11 @@ int file_exists (file_str)
    FALSE otherwise. */
 {
     FILE *stream;
+
+    DEBUG(("FExists: OrigFN %s", file_str));
 #ifdef RISCOS
     TranslateFilename((BYTE *)file_str, FALSE);
+    DEBUG(("Xlat %s", file_str));
 #endif
     if ( (stream = fopen (file_str, "r")) != NULL )
     {
@@ -357,7 +363,7 @@ int file_exists (file_str)
 **  set streamp->result.   file_read and file_reads can return F_EOF too
 */
 
-/*  file_position                                                
+/*  file_position
 **  This function positions a file to a location.   The location is
 **  specified by an offset and an origin, like the C fseek function.
 **  The origins are as follows:
@@ -494,7 +500,7 @@ struct STREAM_DESC *streamp;
    int res = F_OK, bytes_read, ch;
    long reclen;
    if (streamp->access_m == BINARYSEQUENTIAL_ACCESS) {
-      
+
       if ((res = file_position(streamp, -4L, REL_POSITION)) == F_OK)
       if ((res = file_read(streamp, &reclen, 4, &bytes_read)) == F_OK) {
          if (reclen == -1)
@@ -503,9 +509,9 @@ struct STREAM_DESC *streamp;
             reclen += 8;
          res = file_position(streamp, (long)(-reclen), REL_POSITION);
       }
-      
+
    } else if (streamp->access_m == TEXTSEQUENTIAL_ACCESS) {
-               
+
       if (fseek(streamp->fileptr, -1L, REL_POSITION) == 0) {
          ch = fgetc (streamp->fileptr);
          do {
@@ -521,14 +527,14 @@ struct STREAM_DESC *streamp;
          rewind(streamp->fileptr);   /* clear error etc */
          res = OPERATIONFAILED_ERR;
       }
-         
+
    } else
       /* not one of the types we can deal with */
       res = OPERATIONFAILED_ERR;
 
    return (res);
 }
-       
+
 /* Terminate a record */
 int terminate_record (streamp)
 struct STREAM_DESC *streamp;
@@ -551,7 +557,7 @@ struct STREAM_DESC *streamp;
          streamp->suppress_nl = FALSE;
       else
          res += file_write (streamp, &newl, 2);
-   }   
+   }
    return (res);
 }
 
@@ -600,7 +606,7 @@ int new_state;
    } else if ((streamp->state == READING_STATE) &&
               (streamp->access_m == BINARYSEQUENTIAL_ACCESS))
        if (streamp->recl != -1)                    /* Rev 005 */
-         res = file_position (streamp, 
+         res = file_position (streamp,
                            (long)((streamp->recl-streamp->transferred)+4),
                            REL_POSITION);
    if (res != F_OK)
@@ -625,7 +631,7 @@ int filer_close_file (streamp, close_mode)
 /* Rev 002 */
             if ((adjust_state(streamp, WAITING_STATE) == F_OK) &&
                (fclose (streamp->fileptr) == 0))
-/* end of Rev 002 */               
+/* end of Rev 002 */
             {
                 if ((close_mode == CLOSEDEL_OPTION) || (streamp->lifetime_m == TEMPORARY))
                 {
@@ -963,9 +969,11 @@ void open_file (lifetime)
                     {
                         struct STREAM_DESC *streamp = &filers[stream];
                         record_to_string (filename, len, streamp->name);
+                        DEBUG(("FOpen: %s", streamp->name));
 #ifdef RISCOS
                         TranslateFilename((BYTE *)streamp->name,
                                           (open_mode != READ_MODE) || (exist_mode & NEW_FILE));
+                        DEBUG(("Xlat %s", streamp->name));
 #endif
 
                         {
@@ -1481,7 +1489,7 @@ void enquire_file()
    FILE *fp;
 #define DONT_KNOW_ACCESS 0
 
-   if (read_record(&len, fname)) 
+   if (read_record(&len, fname))
       fname[len] = '\0';               /* file name as a string */
 
 #ifdef RISCOS
@@ -1580,10 +1588,13 @@ void read_enviroment ()
     if (read_record (&block_size, buffer))
     {
         char *ptr;
-        extern char *getenv();
 
         buffer[block_size] = '\0';
+#ifdef RISCOS
+        ptr = RO_Getenv (buffer);
+#else
         ptr = getenv (buffer);
+#endif
         if (ptr == NULL)
         {
             write_record (0, "");
@@ -1826,7 +1837,7 @@ void stream_recordlength ()
       write_long_integer (second);
       write_long_integer (third);      /* Rev 003 */
       write_integer (res);
-   }      
+   }
 }
 
 /* User service: Read Record */
@@ -1846,9 +1857,9 @@ void record_read ()
    if (read_integer (&maxlen))
    if (valid_stream (stream_id)) {
       streamp = &filers[stream_id];
-      if (streamp->access_m == BINARYDIRECT_ACCESS || 
+      if (streamp->access_m == BINARYDIRECT_ACCESS ||
           streamp->access_m == TEXTDIRECT_ACCESS) {
-   
+
          /* direct version */
 /*       if (recspec != -1 ) {                       Rev 003 */
          if (recspec & START_OF_RECORD) {         /* Rev 003 */
@@ -1872,8 +1883,8 @@ void record_read ()
          }
       } else if (streamp->access_m == TEXTBYTESTREAM_ACCESS ||
                  streamp->access_m == TEXTSEQUENTIAL_ACCESS) {
-   
-         /* text version */ 
+
+         /* text version */
 /*       if (recspec >= 0) {                             Rev 003 */
          if (recspec & START_OF_RECORD) {             /* Rev 003 */
             if ((res=adjust_state(streamp, READING_STATE)) == F_OK) {
@@ -1891,9 +1902,9 @@ void record_read ()
             maxlen = streamp->recl - streamp->transferred;
          bp = &streamp->text_buff[streamp->transferred];
          bytes_read = maxlen;
-   
+
       } else if (streamp->access_m == BINARYSEQUENTIAL_ACCESS) {
-         
+
          /* bin-seq version */
 /*       if (recspec >= 0) {                          Rev 003 */
          if (recspec & START_OF_RECORD) {          /* Rev 003 */
@@ -1912,7 +1923,7 @@ void record_read ()
          if ((maxlen+streamp->transferred) > streamp->recl)
             maxlen = streamp->recl - streamp->transferred;
 /* Rev 004 if (maxlen > 0) */
-         if (maxlen >= 0)        /* Rev 004 */ 
+         if (maxlen >= 0)        /* Rev 004 */
             res = file_read (streamp, buffer, maxlen, &bytes_read);
 
       } else {
@@ -1933,12 +1944,12 @@ void record_read ()
 
       if (recspec & END_OF_RECORD)                             /* Rev 003 */
          res = adjust_state(streamp, WAITING_STATE);           /* Rev 003 */
-      
+
       write_long_integer (trl);
-      write_record (bytes_read, bp);      
+      write_record (bytes_read, bp);
       write_integer (res);
       streamp->transferred += bytes_read;
-   }   
+   }
 }
 
 /* User service: Write Record */
@@ -1960,9 +1971,9 @@ void record_write ()
    if (read_record (&reclen, buffer))
    if (valid_stream (stream_id)) {
       streamp = &filers[stream_id];
-      if (streamp->access_m == BINARYDIRECT_ACCESS || 
+      if (streamp->access_m == BINARYDIRECT_ACCESS ||
           streamp->access_m == TEXTDIRECT_ACCESS) {
-   
+
          /* direct version */
 /*       if (recspec != -1 ) {                                 Rev 003 */
          if (recspec & START_OF_RECORD) {                   /* Rev 003 */
@@ -1977,10 +1988,10 @@ void record_write ()
          }
          if (reclen > 0)
             res = file_write (streamp, buffer, reclen);
-   
+
       } else if (streamp->access_m == TEXTBYTESTREAM_ACCESS ||
                  streamp->access_m == TEXTSEQUENTIAL_ACCESS) {
-         /* text version */ 
+         /* text version */
 /*       if (recspec >= 0) {                                   Rev 003 */
          if (recspec & START_OF_RECORD) {                   /* Rev 003 */
          if ((res=adjust_state(streamp, WRITING_STATE)) != F_OK) {
@@ -1992,13 +2003,13 @@ void record_write ()
 /*       } else if (recspec == -2)                             Rev 003 */
          }
          if (recspec & RECORD_SUPPRESS_NL)           /* Rev 003 */
-            streamp->suppress_nl = TRUE;  
+            streamp->suppress_nl = TRUE;
          if (reclen > 0) {                         /*Note: what about = ?? */
               res = file_write (streamp, buffer, reclen);
               if (res == F_OK)
                streamp->transferred += reclen;
          }
-   
+
       } else if (streamp->access_m == BINARYSEQUENTIAL_ACCESS) {
 
          /* bin-seq version */
@@ -2016,7 +2027,7 @@ void record_write ()
             if (res == F_OK)
                streamp->transferred += reclen;
          }
-         
+
       } else {
 
          /* bin-bytestream version */
@@ -2039,7 +2050,7 @@ void record_write ()
          res = adjust_state(streamp, WAITING_STATE);           /* Rev 003 */
 
       write_integer (res);
-   }   
+   }
 }
 
 /* User service: Backspace */
@@ -2401,7 +2412,7 @@ void terminate_message (t_code)
         case T_BAD_INT32:
             fprintf (stderr, "Server terminated: bad protocol when expecting INT32\n");
             break;
-/* Rev 002 */            
+/* Rev 002 */
         case T_OUT_OF_MEMORY:
             fprintf (stderr, "Server terminated: not enough memory\n");
             break;

@@ -57,6 +57,22 @@ PRIVATE os_error* CDir(BYTE * name)
   return os_swi6(OS_File + XOS_Bit, 8, (int)name, 0, 0, 0, 0);
 }
 
+/* Get environment variable with IServer$ prefix ------------------------------------------------------- */
+
+EXTERN char ViaFilePath[];
+
+PUBLIC char* RO_Getenv(const char *varname)
+{
+   static char nameBuffer[MAX_SLICE_LENGTH + 9]; /* +8 for "IServer$", +1 for NUL; equivalent to sizeof(DataBuffer)+8 in HostC.c */
+
+   if (strcmp(varname, "ISEARCH") == 0)
+      return ViaFilePath;
+
+   strcpy(nameBuffer, "IServer$");
+   strcpy(nameBuffer + 8, varname);
+   return getenv(nameBuffer);
+}
+
 /* Translate file name ---------------------------------------------------------------------------------- */
 
 PUBLIC VOID TranslateFilename(BYTE* Name, BOOL CreateDir)

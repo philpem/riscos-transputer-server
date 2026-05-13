@@ -85,6 +85,7 @@ PRIVATE struct IOSB_DESC {
 
 #ifdef RISCOS
 EXTERN char ViaFilePath[];
+EXTERN char* RO_Getenv(const char *);
 #endif
 
 
@@ -351,23 +352,12 @@ PUBLIC VOID SpGetenv()
 {
    BUFFER_DECLARATIONS;
    BYTE *Name;
-#ifdef RISCOS
-   BYTE NameBuffer[sizeof(DataBuffer) + 8];
-#endif
 
    DEBUG(( "SP.GETENV" ));
    INIT_BUFFERS;
 
-#ifndef RISCOS
    Name = &DataBuffer[0];
-
    GET_SLICE( Size, Name ); *(Name+Size)=0; DEBUG(( "\"%s\"", Name ));
-#else
-   strcpy((char *)NameBuffer, "IServer$");
-   Name = &NameBuffer[8];
-
-   GET_SLICE( Size, Name ); *(Name+Size)=0; DEBUG(( "\"%s\"", NameBuffer ));
-#endif
 
    if( *Name == 0 )
       {
@@ -375,17 +365,10 @@ PUBLIC VOID SpGetenv()
       }
    else
       {
-#ifndef RISCOS
-         if( ( Name=(BYTE *)getenv( (char*)Name ) ) == NULL )
+#ifdef RISCOS
+         if( ( Name=(BYTE *)RO_Getenv( (char*)Name ) ) == NULL )
 #else
-         if( !strcmp((char*)Name, "ISEARCH") )
-         {
-           DEBUG(( "\"%s\"", ViaFilePath ));
-           PUT_BYTE( SP_SUCCESS );
-           Size = strlen(ViaFilePath);
-           PUT_SLICE( Size, ViaFilePath );
-         } else
-         if( ( Name=(BYTE *)getenv( (char*)NameBuffer ) ) == NULL )
+         if( ( Name=(BYTE *)getenv( (char*)Name ) ) == NULL )
 #endif
             {
                PUT_BYTE( SP_ERROR );
