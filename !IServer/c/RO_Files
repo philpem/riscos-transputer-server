@@ -37,6 +37,7 @@ EXTERN VOID Throwback(const int, const char *, const int, const char *);
 
 EXTERN BOOL WindowActive;
 EXTERN BOOL ThrowbackSwitch;
+EXTERN BOOL CocoPops;
 
 /* Utility routines ===================================================================================== */
 
@@ -64,13 +65,23 @@ EXTERN char ViaFilePath[];
 PUBLIC char* RO_Getenv(const char *varname)
 {
    static char nameBuffer[MAX_SLICE_LENGTH + 9]; /* +8 for "IServer$", +1 for NUL; equivalent to sizeof(DataBuffer)+8 in HostC.c */
+   char *env;
+
+   DEBUG(("RO_Getenv %s", varname));
 
    if (strcmp(varname, "ISEARCH") == 0)
       return ViaFilePath;
 
    strcpy(nameBuffer, "IServer$");
    strcpy(nameBuffer + 8, varname);
-   return getenv(nameBuffer);
+
+   env = getenv(nameBuffer);
+
+   DEBUG(("RO_Getenv('%s') = '%s'",
+         nameBuffer,
+         (env != NULL) ? env : "<NULL>"));
+
+   return env;
 }
 
 /* Translate file name ---------------------------------------------------------------------------------- */
